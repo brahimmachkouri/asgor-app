@@ -304,7 +304,7 @@ Aujourd'hui :
 
 ## Licence
 
-[MIT](LICENSE) © 2026 BM. Les polices IBM Plex fournies dans `web/asgor_web/static/polices/` sont sous licence SIL Open Font License 1.1 (`LICENCE-OFL.txt`).
+[MIT](LICENSE). Les polices IBM Plex fournies dans `web/asgor_web/static/polices/` sont sous licence SIL Open Font License 1.1 (`LICENCE-OFL.txt`).
 
 ### Règles Semgrep utilisées par Opengrep
 
