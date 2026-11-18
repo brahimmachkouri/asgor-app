@@ -1,0 +1,12 @@
+#!/usr/bin/python3 -I
+# asgor-worker — relève la file des demandes et lance les analyses une par une.
+# À lancer en root sur la VM (service systemd à l'étape 5). Aucun port ouvert.
+# -I : Python ignore les variables d'environnement et le dossier courant.
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, "/opt/asgor/moteur")
+
+from asgor_moteur.worker import main  # noqa: E402
+
+sys.exit(main())

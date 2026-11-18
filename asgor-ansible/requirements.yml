@@ -1,0 +1,6 @@
+---
+# community.general : module ufw (pare-feu)
+# ansible.posix : module mount (disque de données)
+collections:
+  - name: community.general
+  - name: ansible.posix

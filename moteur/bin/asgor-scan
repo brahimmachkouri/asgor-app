@@ -1,0 +1,10 @@
+#!/usr/bin/python3 -I
+# asgor-scan — analyse un dépôt GitHub public. À lancer en root sur la VM.
+# -I : Python ignore les variables d'environnement et le dossier courant.
+import sys
+
+sys.path.insert(0, "/opt/asgor/moteur")
+
+from asgor_moteur.cli import main  # noqa: E402
+
+sys.exit(main())

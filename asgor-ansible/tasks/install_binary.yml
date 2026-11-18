@@ -1,0 +1,61 @@
+---
+# Installe un binaire GitHub épinglé :
+#   /opt/asgor/tools/<nom>/<version>/<nom>  puis lien /usr/local/bin/<nom>
+# Changer de version crée un nouveau dossier : l'ancienne version reste
+# disponible pour un retour arrière.
+
+- name: "Binaire - définir les chemins ({{ tool.name }})"
+  ansible.builtin.set_fact:
+    asgor_tool_dir: '{{ asgor_root }}/tools/{{ tool.name }}/{{ tool.version }}'
+    asgor_tool_url: "{{ tool.url | replace('{version}', tool.version) }}"
+
+- name: "Binaire - créer le dossier de version ({{ tool.name }})"
+  ansible.builtin.file:
+    path: '{{ asgor_tool_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: "Binaire - télécharger l'archive avec contrôle SHA256 ({{ tool.name }})"
+  ansible.builtin.get_url:
+    url: '{{ asgor_tool_url }}'
+    dest: '{{ asgor_tool_dir }}/download.tar.gz'
+    checksum: 'sha256:{{ tool.sha256 }}'
+    owner: root
+    group: root
+    mode: '0600'
+  when: tool.archive | bool
+
+- name: "Binaire - extraire le binaire ({{ tool.name }})"
+  ansible.builtin.unarchive:
+    src: '{{ asgor_tool_dir }}/download.tar.gz'
+    dest: '{{ asgor_tool_dir }}'
+    remote_src: true
+    include: ['{{ tool.member }}']
+    creates: '{{ asgor_tool_dir }}/{{ tool.member }}'
+  when: tool.archive | bool
+
+- name: "Binaire - télécharger le binaire avec contrôle SHA256 ({{ tool.name }})"
+  ansible.builtin.get_url:
+    url: '{{ asgor_tool_url }}'
+    dest: '{{ asgor_tool_dir }}/{{ tool.name }}'
+    checksum: 'sha256:{{ tool.sha256 }}'
+    owner: root
+    group: root
+    mode: '0755'
+  when: not (tool.archive | bool)
+
+- name: "Binaire - fixer les droits du binaire ({{ tool.name }})"
+  ansible.builtin.file:
+    path: "{{ asgor_tool_dir }}/{{ tool.member | default(tool.name) }}"
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: "Binaire - activer cette version ({{ tool.name }})"
+  ansible.builtin.file:
+    src: "{{ asgor_tool_dir }}/{{ tool.member | default(tool.name) }}"
+    dest: '/usr/local/bin/{{ tool.name }}'
+    state: link
+    force: true

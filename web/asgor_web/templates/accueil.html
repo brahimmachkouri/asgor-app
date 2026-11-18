@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block titre %}Nouvelle analyse{% endblock %}
+{% block contenu %}
+{% if not worker_vivant %}
+<p class="bandeau bandeau-alerte" role="alert">Le service d'analyse ne donne plus signe de vie : les nouvelles demandes attendront son redémarrage.</p>
+{% endif %}
+
+<section class="pile">
+  <div class="pile-serree">
+    <h1 class="titre-principal">Analyse de sécurité d'un dépôt GitHub</h1>
+    <p class="chapeau">Collez l'adresse d'un dépôt public. ASGOR recherche les secrets, les dépendances vulnérables et les failles dans le code PHP et Python, puis donne une note de A à F.</p>
+  </div>
+
+  <form class="carte formulaire" method="post" action="/analyses">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="url" class="etiquette">URL du dépôt GitHub</label>
+    {% if erreur %}
+    <p class="erreur" id="erreur-url" role="alert">{{ erreur }}</p>
+    {% endif %}
+    <div class="ligne-saisie">
+      <input id="url" name="url" type="url" required maxlength="200" class="saisie" placeholder="https://github.com/organisation/depot" value="{{ url_saisie }}"{% if erreur %} aria-invalid="true" aria-describedby="erreur-url"{% endif %}>
+      <button type="submit" class="bouton bouton-principal">Analyser</button>
+    </div>
+    <div class="options">
+      <label class="case"><input type="checkbox" name="masquee" value="oui"{% if masquee_cochee %} checked{% endif %}>Ne pas afficher dans les analyses récentes</label>
+      <label class="case"><input type="checkbox" name="historique" value="oui"{% if historique_coche %} checked{% endif %}>Analyser tout l'historique Git (secrets)</label>
+    </div>
+    <p class="petit">Dépôts publics de github.com uniquement. Taille maximale : 500 Mo. Durée maximale d'une analyse : 30 minutes. Sans l'historique Git, la note est B au maximum.</p>
+  </form>
+</section>
+
+<section id="recentes" class="pile">
+  <h2 class="titre-section">Analyses récentes</h2>
+  {% if recentes %}
+  <div class="tableau-defilant carte">
+    <table class="tableau">
+      <thead>
+        <tr><th scope="col">Note</th><th scope="col">Dépôt</th><th scope="col">Commit</th><th scope="col">Date</th><th scope="col">Durée</th></tr>
+      </thead>
+      <tbody>
+        {% for r in recentes %}
+        <tr>
+          <td><span class="pastille {{ r.note | classe_note }}">{{ r.note }}</span></td>
+          <td><a class="mono" href="/analyses/{{ r.id }}">github.com/{{ r.proprietaire }}/{{ r.nom }}</a></td>
+          <td class="mono">{{ r.commit_sha | court }}</td>
+          <td>{{ r.fin | date }}</td>
+          <td>{{ r.duree_s | duree }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="carte vide">Aucune analyse terminée pour le moment.</p>
+  {% endif %}
+</section>
+
+<section id="outils" class="pile-serree">
+  <h2 class="titre-section-petit">Outils utilisés</h2>
+  {% if outils %}
+  <ul class="liste-outils">
+    {% for nom, version in outils | dictsort %}
+    <li class="outil"><strong>{{ nom }}</strong> <span>{{ version }}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="petit">Liste des outils indisponible.</p>
+  {% endif %}
+</section>
+{% endblock %}

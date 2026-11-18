@@ -1,0 +1,18 @@
+# Tests du service web, sur le Mac seulement (client de test de FastAPI)
+# Généré le 15/11/2026 à partir de l'API JSON de PyPI : une somme SHA256
+# par fichier publié (sdist et toutes les roues), comme pip-compile --generate-hashes.
+# Règle : versions publiées depuis au moins 14 jours. Installer avec :
+#   pip install --require-hashes --no-deps -r <ce fichier>
+
+# certifi : publié le 2026-10-23, 2 fichier(s)
+certifi==2026.10.23 \
+    --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd \
+    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+# httpcore : publié le 2025-04-24, 2 fichier(s)
+httpcore==1.0.9 \
+    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
+    --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
+# httpx : publié le 2024-12-06, 2 fichier(s)
+httpx==0.28.1 \
+    --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
+    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad

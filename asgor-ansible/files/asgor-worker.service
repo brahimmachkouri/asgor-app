@@ -1,0 +1,41 @@
+# ASGOR — worker (géré par Ansible)
+# Root, aucun port ouvert. Relève la file, lance les analyses une par une via
+# asgor-sandbox (unités systemd temporaires créées par PID 1, qui ne
+# dépendent pas des restrictions ci-dessous).
+[Unit]
+Description=ASGOR worker (analyses)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/asgor
+
+[Service]
+Type=exec
+ExecStart=/usr/local/sbin/asgor-worker
+Restart=on-failure
+RestartSec=10
+# À l'arrêt : SIGTERM, le worker arrête l'analyse en cours et la marque en échec.
+TimeoutStopSec=90
+
+# Le worker lui-même n'a besoin d'aucun réseau : git, curl et les outils
+# tournent dans les unités de asgor-sandbox. Il parle à systemd par socket Unix.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

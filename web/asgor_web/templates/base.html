@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% if rafraichir %}
+<meta http-equiv="refresh" content="{{ rafraichir }}">
+{% endif %}
+<title>{% block titre %}ASGOR{% endblock %} — ASGOR</title>
+<link rel="stylesheet" href="/static/style.css?v={{ VERSION_STYLE }}">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="entete">
+  <div class="entete-contenu">
+    <a class="marque" href="/">
+      <svg class="logo" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"></path><path d="M9 12l2 2 4-4"></path></svg>
+      <span class="nom" title="Automated Security Grading Of Repositories">ASGOR</span>
+    </a>
+    <nav class="navigation" aria-label="Navigation principale">
+      <a href="/">Nouvelle analyse</a>
+      <a href="/#recentes">Analyses récentes</a>
+      <a href="/#outils">Outils</a>
+      <a href="/aide">Aide</a>
+      {% block navigation_page %}{% endblock %}
+    </nav>
+  </div>
+</header>
+<main class="page">
+{% block contenu %}{% endblock %}
+</main>
+<footer class="pied-de-page">Automated Security Grading Of Repositories - Designed by BM 🇫🇷 2026</footer>
+</body>
+</html>

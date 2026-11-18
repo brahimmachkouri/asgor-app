@@ -1,0 +1,30 @@
+#!/opt/asgor/venvs/web/bin/python -I
+# asgor-web — service web ASGOR. Compte asgor-web, aucun droit root.
+# Options (fixées dans le service systemd, géré par Ansible) :
+#   --hote      adresse d'écoute (127.0.0.1 par défaut)
+#   --proxy     adresse du reverse proxy (Caddy) dont on accepte les en-têtes
+#               X-Forwarded-For et X-Forwarded-Proto (plusieurs --proxy possibles)
+# -I : Python ignore les variables d'environnement PYTHON* et le dossier courant.
+import argparse
+import ipaddress
+import sys
+
+sys.dont_write_bytecode = True
+sys.path[:0] = ["/opt/asgor/moteur", "/opt/asgor/web"]
+
+import uvicorn  # noqa: E402
+
+from asgor_web.app import creer_app  # noqa: E402
+
+options = argparse.ArgumentParser(prog="asgor-web")
+options.add_argument("--hote", default="127.0.0.1", type=lambda v: str(ipaddress.ip_address(v)))
+options.add_argument("--port", default=8000, type=int)
+options.add_argument("--proxy", action="append", default=[],
+                     type=lambda v: str(ipaddress.ip_address(v)))
+arguments = options.parse_args()
+
+# Sans --proxy, aucun en-tête X-Forwarded-* n'est pris en compte.
+uvicorn.run(creer_app(), host=arguments.hote, port=arguments.port, server_header=False,
+            proxy_headers=bool(arguments.proxy),
+            forwarded_allow_ips=",".join(arguments.proxy) or "127.0.0.1",
+            log_level="info")

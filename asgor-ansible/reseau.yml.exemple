@@ -1,0 +1,17 @@
+---
+# Adresses propres au réseau d'installation. Copier ce fichier en reseau.yml
+# (ignoré par Git) et remplacer les adresses d'exemple.
+
+# IP autorisées par le pare-feu (SSH). Derrière un NAT, c'est l'IP de sortie du
+# NAT qui compte. Le playbook refuse de continuer si la connexion Ansible ne
+# vient pas de l'une d'elles.
+asgor_admin_ips:
+  - 192.168.1.20
+  - 192.168.1.21
+
+# Reverse proxy (Caddy) : il gère le certificat et filtre les IP d'administration.
+# Le service web n'accepte les connexions que de lui (et de la VM elle-même, pour
+# le tunnel SSH), et ne fait confiance qu'à ses en-têtes X-Forwarded-*.
+# Mettre l'adresse telle que la VM la voit.
+asgor_proxy_ips:
+  - 192.168.1.30

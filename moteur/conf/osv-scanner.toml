@@ -1,0 +1,2 @@
+# Configuration OSV-Scanner d'ASGOR : aucune exclusion.
+# Ce fichier remplace l'osv-scanner.toml du dépôt analysé, qui n'est jamais lu.

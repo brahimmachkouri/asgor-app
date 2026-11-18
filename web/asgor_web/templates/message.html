@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titre %}{{ titre }}{% endblock %}
+{% block contenu %}
+<section class="carte pile-serree">
+  {% if analyse is defined and analyse %}
+  <span class="surtitre">github.com/{{ analyse.proprietaire }}/{{ analyse.nom }}</span>
+  {% endif %}
+  <h1 class="titre-depot">{{ titre }}</h1>
+  <p>{{ texte }}</p>
+  <div class="actions">
+    {% if renvoi is defined and renvoi %}
+    <a class="bouton bouton-principal" href="/analyses/{{ renvoi }}">Voir le rapport</a>
+    {% endif %}
+    {% if (forcer is defined and forcer) or (relancer is defined and relancer) %}
+    <form method="post" action="/analyses/{{ analyse.id }}/relancer">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="bouton {% if renvoi is defined and renvoi %}bouton-secondaire{% else %}bouton-principal{% endif %}">{% if forcer is defined and forcer %}Analyser quand même{% else %}Réessayer{% endif %}</button>
+    </form>
+    {% endif %}
+    <a class="bouton bouton-secondaire" href="/">Nouvelle analyse</a>
+  </div>
+</section>
+{% endblock %}

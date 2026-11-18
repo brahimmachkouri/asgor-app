@@ -1,0 +1,903 @@
+---
+# ASGOR — Phase 1 : socle de la VM de scan
+# Cible : Ubuntu Server 26.04 LTS amd64 (VM QEMU/KVM Proxmox)
+#
+# Principes :
+#  - les scanners binaires sont épinglés (version + SHA256), jamais « latest » ;
+#  - un outil dont le SHA256 n'est pas renseigné n'est pas installé ;
+#  - chaque version s'installe dans son propre dossier, un lien pointe vers la version active.
+
+- name: ASGOR - socle Ubuntu Server 26.04
+  hosts: asgor
+  become: true
+  gather_facts: true
+  # En simulation (--check) sur une VM neuve, rien n'est réellement installé :
+  # beaucoup de tâches échouent (service, utilisateur, venv absents).
+  # On continue donc malgré ces erreurs, SAUF pour les contrôles de sécurité
+  # du début (ignore_errors: false explicite).
+  ignore_errors: "{{ ansible_check_mode }}"
+
+  # Adresses propres au réseau d'installation (IP d'administration, reverse proxy) :
+  # fichier hors Git, à créer à partir de reseau.yml.exemple.
+  vars_files:
+    - reseau.yml
+
+  vars:
+    asgor_ubuntu_version: '26.04'
+    asgor_root: /opt/asgor
+    asgor_data: /var/lib/asgor
+    # Disque de données (50 Go). Les données ne doivent jamais être sur le disque
+    # système : /var/lib/asgor est un montage « bind » de <disque>/asgor.
+    asgor_data_disk: /mnt/data
+    asgor_etc: /etc/asgor
+
+    # asgor_admin_ips (IP autorisées par UFW pour SSH) et asgor_proxy_ips (reverse proxy) :
+    # dans reseau.yml.
+    asgor_firewall: true
+    asgor_web_port: 8000
+    asgor_ssh_hardening: true
+    # Ansible se connecte en root : connexion root autorisée, mais par clé uniquement.
+    # Passer à 'no' seulement si Ansible utilise un autre compte.
+    asgor_ssh_permit_root: 'prohibit-password'
+
+    # Redémarrage seulement si nécessaire, le samedi à 23 h
+    asgor_reboot_oncalendar: 'Sat *-*-* 23:00:00'
+
+    # Phase 1b : isolation des analyses (voir files/asgor-sandbox)
+    asgor_sandbox_mem_max: 4G          # mémoire maximale d'une étape
+    asgor_sandbox_mem_max_haute: 6G    # étape lourde (Psalm), VM à 8 Go
+    asgor_sandbox_cpu_quota: 300%      # 3 vCPU sur 4
+    asgor_sandbox_runtime_max: 1800    # secondes par étape
+    # Destinations interdites au profil « fetch » (réseau interne, VM elle-même)
+    asgor_sandbox_deny_cidrs:
+      - 0.0.0.0/8
+      - 10.0.0.0/8
+      - 100.64.0.0/10
+      - 127.0.0.0/8
+      - 169.254.0.0/16
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - ::1/128
+      - fc00::/7
+      - fe80::/10
+    # Exceptions : résolveur DNS local (systemd-resolved). Ajouter ici un proxy HTTP interne si besoin.
+    asgor_sandbox_allow_cidrs:
+      - 127.0.0.53/32
+
+    # Outils Python : un venv par outil (évite les conflits de dépendances).
+    # Épingler chaque outil après vérification de la version (ex. 'bandit==X.Y.Z').
+    asgor_python_tools:
+      - name: bandit
+        spec: 'bandit==1.9.4'      # 25/02/2026
+        bins: [bandit]
+        enabled: true
+      - name: pip-audit
+        spec: 'pip-audit==2.10.1'  # 10/06/2026
+        bins: [pip-audit]
+        enabled: true
+
+    # Binaires publiés sur GitHub. Version vide = outil non installé.
+    # Valeurs relevées le 14/11/2026 (voir README : vérifier les signatures avant usage).
+    asgor_binary_tools:
+      - name: gitleaks
+        version: '8.30.1'
+        sha256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'  # gitleaks_8.30.1_checksums.txt
+        url: 'https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_linux_x64.tar.gz'
+        archive: true
+        member: gitleaks
+      - name: trivy
+        version: '0.76.2'    # publiée bien après l'incident de mars 2026 (v0.69.4 malveillante)
+        sha256: 'bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf'  # trivy_0.76.2_checksums.txt
+        url: 'https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-64bit.tar.gz'
+        archive: true
+        member: trivy
+      - name: osv-scanner
+        version: '2.7.1'
+        sha256: 'fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8'  # osv-scanner_SHA256SUMS
+        url: 'https://github.com/google/osv-scanner/releases/download/v{version}/osv-scanner_linux_amd64'
+        archive: false
+      - name: opengrep
+        version: '2.0.0'
+        # Pas de fichier de sommes publié : SHA256 calculé sur le binaire téléchargé.
+        # La signature Cosign (.sig + .cert) doit être vérifiée (voir README).
+        sha256: '37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0'
+        url: 'https://github.com/opengrep/opengrep/releases/download/v{version}/opengrep_linux_x86'  # nom des binaires Linux depuis la v2
+        archive: false
+      # Psalm et PHPStan : PHAR officiels (un seul fichier, signé GPG) au lieu de Composer,
+      # qui installait 55 paquets sans aucune somme de contrôle.
+      # SHA256 : empreinte publiée par GitHub sur la release, recalculée le 16/11/2026.
+      # Signature GPG vérifiée par verifier-signatures.sh.
+      - name: psalm
+        # EXCEPTION à la règle des 14 jours : publiée le
+        # 14/11/2026, aucune version 7 stable plus ancienne. Conforme à partir du 28/11/2026.
+        version: '7.5.0'
+        sha256: 'cdb2430a6cfaff77863e0d965dc6d2c5b03a9351460d4c4b5e587ed701be41a7'
+        url: 'https://github.com/vimeo/psalm/releases/download/{version}/psalm.phar'
+        archive: false
+      - name: phpstan
+        version: '2.3.4'     # publiée le 28/10/2026 (2.3.5 du 03/11 : moins de 14 jours le 16/11)
+        sha256: 'a961d12cc71941a31ad6560e6a330347d487612628c3202a718f71a59de21a7c'
+        url: 'https://github.com/phpstan/phpstan/releases/download/{version}/phpstan.phar'
+        archive: false
+
+    # Règles de Semgrep et d'Opengrep (dépôt semgrep/semgrep-rules), figées à un commit.
+    # Licence « Semgrep Rules License v1.0 » : usage interne seulement, pas de
+    # redistribution. Elles ne sont donc JAMAIS copiées dans ce dépôt : le playbook
+    # les télécharge sur la VM (voir README.md, « Licence »).
+    # SHA256 de l'archive https://github.com/semgrep/semgrep-rules/archive/<commit>.tar.gz
+    asgor_semgrep_rules_commit: 'a5ad1714f00c9f7fde980cab0ea1d6dc6d414fd2'   # 10/11/2026
+    asgor_semgrep_rules_sha256: 'e5a7ec33035fc7707b87385cb99e1228c76b1604efe5439e92891f3005714cc3'
+    asgor_semgrep_rules_dir: '{{ asgor_root }}/regles/semgrep-rules'
+
+  pre_tasks:
+    - name: Vérifier la version d'Ubuntu et l'architecture
+      ignore_errors: false
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version == asgor_ubuntu_version
+          - ansible_architecture == 'x86_64'
+        fail_msg: 'Ce playbook cible Ubuntu {{ asgor_ubuntu_version }} amd64.'
+
+    - name: Vérifier les SHA256 des binaires activés
+      ignore_errors: false
+      ansible.builtin.assert:
+        that:
+          - item.sha256 is match('^[0-9a-fA-F]{64}$')
+        fail_msg: '{{ item.name }} : version renseignée sans SHA256 valide (64 caractères hexadécimaux).'
+        quiet: true
+      loop: '{{ asgor_binary_tools }}'
+      loop_control:
+        label: '{{ item.name }}'
+      when: item.version | length > 0
+
+    - name: Vérifier le commit et le SHA256 des règles Semgrep
+      ignore_errors: false
+      ansible.builtin.assert:
+        that:
+          - asgor_semgrep_rules_commit is match('^[0-9a-f]{40}$')
+          - asgor_semgrep_rules_sha256 is match('^[0-9a-fA-F]{64}$')
+        fail_msg: 'Règles Semgrep : commit (40 caractères) ou SHA256 (64 caractères) invalide.'
+        quiet: true
+
+    # Deux sources pour l'IP vue par la VM : la variable SSH_CONNECTION
+    # (lue sans sudo, qui l'efface) et les connexions ouvertes sur le port 22.
+    - name: Lire l'IP de connexion vue par la VM
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "ENV ${SSH_CONNECTION:-}"
+        ss -Htn state established 2>/dev/null | awk '{print "SS", $3, $4}'
+      args:
+        executable: /bin/bash
+      become: false
+      register: asgor_ssh_sessions
+      changed_when: false
+      check_mode: false   # lecture seule : doit aussi tourner avec --check
+      when: asgor_firewall | bool
+
+    - name: Extraire les IP sources
+      ansible.builtin.set_fact:
+        asgor_ssh_peers: >-
+          {{ ((asgor_ssh_sessions.stdout_lines
+               | select('match', '^ENV .')
+               | map('split') | map(attribute=1) | list)
+             + (asgor_ssh_sessions.stdout_lines
+               | select('match', '^SS [^ ]+:22 ')
+               | map('split') | map('last')
+               | map('regex_replace', ':[0-9]+$', '')
+               | map('regex_replace', '[][]', '')
+               | list))
+             | map('regex_replace', '^::ffff:', '')
+             | unique | list }}
+      when: asgor_firewall | bool
+
+    - name: Vérifier que la connexion vient d'une IP autorisée (évite de se bloquer)
+      ignore_errors: false
+      ansible.builtin.assert:
+        that:
+          - asgor_ssh_peers | intersect(asgor_admin_ips) | length > 0
+        fail_msg: >-
+          IP vues : {{ asgor_ssh_peers | join(', ') | default('aucune', true) }}.
+          Aucune n'est dans asgor_admin_ips : le pare-feu vous bloquerait.
+          Sortie brute : {{ asgor_ssh_sessions.stdout_lines }}
+        success_msg: 'Connexion autorisée depuis : {{ asgor_ssh_peers | intersect(asgor_admin_ips) | join(", ") }}'
+      when: asgor_firewall | bool
+
+  handlers:
+    - name: Recharger SSH
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: reloaded
+
+    - name: Recharger systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+  tasks:
+    # ------------------------------------------------------------------ paquets
+    - name: Installer les paquets du socle
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        name:
+          - ca-certificates
+          - curl
+          - git
+          - jq
+          - unzip
+          - python3
+          - python3-venv
+          - python3-pip
+          - php-cli
+          - php-xml
+          - php-mbstring
+          - php-curl
+          - php-zip
+          - composer
+          - qemu-guest-agent
+          - unattended-upgrades
+          - apt-listchanges
+          - ufw
+          - bubblewrap        # isolation des scanners (phase 1b)
+        state: present
+
+    # L'agent ne démarre que si Proxmox fournit son canal virtio : option
+    # « QEMU Guest Agent » activée dans la VM, puis arrêt complet et démarrage.
+    - name: Chercher le canal QEMU Guest Agent fourni par Proxmox
+      ansible.builtin.stat:
+        path: /dev/virtio-ports/org.qemu.guest_agent.0
+      register: asgor_qga_port
+
+    - name: Démarrer le QEMU Guest Agent
+      ansible.builtin.systemd_service:
+        name: qemu-guest-agent
+        state: started
+      when: asgor_qga_port.stat.exists
+
+    - name: Signaler l'option Proxmox manquante
+      ansible.builtin.debug:
+        msg: >-
+          QEMU Guest Agent installé mais non démarré : activez l'option
+          « QEMU Guest Agent » de la VM dans Proxmox, puis arrêtez et
+          redémarrez la VM depuis Proxmox (un reboot interne ne suffit pas).
+      when: not asgor_qga_port.stat.exists
+
+    # ------------------------------------------------------- compte et dossiers
+    - name: Créer le compte de service
+      ansible.builtin.user:
+        name: asgor
+        system: true
+        create_home: false
+        home: '{{ asgor_data }}'
+        shell: /usr/sbin/nologin
+
+    # Étape 4 : compte du service web (aucun droit root, aucun shell)
+    - name: Créer le compte du service web
+      ansible.builtin.user:
+        name: asgor-web
+        system: true
+        create_home: false
+        home: /nonexistent
+        shell: /usr/sbin/nologin
+
+    # ------------------------------------------------------ disque de données
+    # Les données vont sur le disque de données, pas sur le disque système.
+    # Les chemins ne changent pas : /var/lib/asgor est un montage « bind »
+    # de {{ asgor_data_disk }}/asgor.
+    - name: Vérifier que le disque de données est monté
+      ignore_errors: false
+      ansible.builtin.command: 'findmnt -n -o SOURCE --mountpoint {{ asgor_data_disk }}'
+      changed_when: false
+      check_mode: false
+
+    # 0751 : les autres comptes peuvent traverser le dossier sans le lister.
+    # asgor-web atteint ainsi file/, database/ et reports/ (droits ci-dessous) ;
+    # jobs/, cache/, logs/ et .ssh/ restent en 0700, réservés à asgor.
+    - name: Créer le dossier de données sur le disque de données
+      ansible.builtin.file:
+        path: '{{ asgor_data_disk }}/asgor'
+        state: directory
+        owner: asgor
+        group: asgor
+        mode: '0751'
+
+    - name: Regarder si /var/lib/asgor est déjà sur le disque de données
+      ansible.builtin.command: 'findmnt -n -o SOURCE --mountpoint {{ asgor_data }}'
+      register: asgor_data_mount
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Une seule fois : l'ancien dossier (sur le disque système) est copié puis
+    # mis de côté, jamais supprimé par le playbook.
+    - name: Copier les données existantes vers le disque de données
+      ansible.builtin.shell: |
+        set -e
+        if [ -d '{{ asgor_data }}' ]; then
+          cp -a '{{ asgor_data }}/.' '{{ asgor_data_disk }}/asgor/'
+          mv '{{ asgor_data }}' '{{ asgor_data }}.avant-migration'
+        fi
+        install -d -o asgor -g asgor -m 0750 '{{ asgor_data }}'
+      args:
+        executable: /bin/bash
+      when: asgor_data_mount.rc != 0
+
+    - name: Monter le dossier de données sur /var/lib/asgor
+      ansible.posix.mount:
+        path: '{{ asgor_data }}'
+        src: '{{ asgor_data_disk }}/asgor'
+        fstype: none
+        opts: 'bind,x-systemd.requires-mounts-for={{ asgor_data_disk }}'
+        state: mounted
+
+    - name: Exiger que les données soient sur le disque de données
+      ignore_errors: false
+      ansible.builtin.command: 'findmnt -n -o SOURCE --mountpoint {{ asgor_data }}'
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Créer le dossier de données (home du compte)
+      ansible.builtin.file:
+        path: '{{ asgor_data }}'
+        state: directory
+        owner: asgor
+        group: asgor
+        mode: '0751'
+
+    - name: Créer les dossiers de données privés
+      ansible.builtin.file:
+        path: '{{ asgor_data }}/{{ item }}'
+        state: directory
+        owner: asgor
+        group: asgor
+        mode: '0700'
+      loop: [repos, jobs, cache, cache/composer, cache/trivy, cache/osv, ai_queue, logs, .ssh]
+
+    # Le worker (root) écrit la base et les
+    # rapports, le service web les lit ; le service web dépose ses demandes dans file/.
+    - name: Créer les dossiers partagés avec le service web
+      ansible.builtin.file:
+        path: '{{ asgor_data }}/{{ item.nom }}'
+        state: directory
+        owner: '{{ item.proprietaire }}'
+        group: asgor-web
+        mode: '{{ item.mode }}'
+      loop:
+        - {nom: database, proprietaire: root, mode: '0750'}
+        - {nom: reports, proprietaire: root, mode: '0750'}
+        - {nom: file, proprietaire: asgor-web, mode: '0700'}
+      loop_control:
+        label: '{{ item.nom }}'
+
+    - name: Créer les dossiers applicatifs
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ asgor_root }}'
+        - '{{ asgor_root }}/config'
+        - '{{ asgor_root }}/config/rules'
+        - '{{ asgor_root }}/scripts'
+        - '{{ asgor_root }}/venvs'
+        - '{{ asgor_root }}/tools'
+
+    - name: Créer le dossier de configuration
+      ansible.builtin.file:
+        path: '{{ asgor_etc }}'
+        state: directory
+        owner: root
+        group: asgor
+        mode: '0750'
+
+    - name: Créer repositories.txt s'il n'existe pas (jamais écrasé)
+      ansible.builtin.copy:
+        dest: '{{ asgor_etc }}/repositories.txt'
+        owner: root
+        group: asgor
+        mode: '0640'
+        force: false
+        content: |
+          # Dépôts surveillés par ASGOR — un dépôt par ligne
+          # Lignes vides et lignes commençant par # ignorées
+          # https://github.com/utilisateur/application
+
+    # ------------------------------------------------------------ mises à jour
+    - name: Limiter unattended-upgrades aux correctifs de sécurité
+      # « #clear » vide les listes définies par 50unattended-upgrades.
+      # Sans cela, les origines de ce fichier s'ajoutent à celles par défaut.
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/52asgor-security
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          #clear Unattended-Upgrade::Allowed-Origins;
+          #clear Unattended-Upgrade::Origins-Pattern;
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESMInfra:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::Automatic-Reboot "false";
+
+    - name: Activer les vérifications quotidiennes APT
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+
+    - name: Lire la configuration APT effective
+      ansible.builtin.command: apt-config dump Unattended-Upgrade::Allowed-Origins Unattended-Upgrade::Origins-Pattern
+      register: asgor_uu_dump
+      changed_when: false
+      check_mode: false
+
+    - name: Vérifier que seules des origines de sécurité restent actives
+      ansible.builtin.assert:
+        that:
+          - asgor_uu_dump.stdout_lines
+            | select('search', '"[^"]+"')
+            | reject('search', 'security')
+            | list | length == 0
+        fail_msg: "Origines non liées à la sécurité encore actives : {{ asgor_uu_dump.stdout_lines }}"
+
+    - name: Installer le script de redémarrage conditionnel
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/asgor-reboot-if-required
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          # Redémarre uniquement si une mise à jour l'exige
+          if [ -f /run/reboot-required ]; then
+              logger -t asgor "Redémarrage planifié : $(cat /run/reboot-required.pkgs 2>/dev/null | tr '\n' ' ')"
+              /usr/bin/systemctl reboot
+          fi
+
+    - name: Créer le service de redémarrage conditionnel
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/asgor-reboot.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=ASGOR - redemarrage si requis par les mises a jour
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/asgor-reboot-if-required
+      notify: Recharger systemd
+
+    - name: Créer le timer de redémarrage hebdomadaire
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/asgor-reboot.timer
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=ASGOR - verification hebdomadaire du redemarrage
+
+          [Timer]
+          OnCalendar={{ asgor_reboot_oncalendar }}
+          Persistent=false
+
+          [Install]
+          WantedBy=timers.target
+      notify: Recharger systemd
+
+    - name: Appliquer les unités systemd modifiées
+      ansible.builtin.meta: flush_handlers
+
+    - name: Activer le timer de redémarrage
+      ansible.builtin.systemd_service:
+        name: asgor-reboot.timer
+        enabled: true
+        state: started
+
+    # --------------------------------------------------------- SSH et pare-feu
+    - name: Vérifier qu'une clé SSH est installée pour le compte Ansible
+      ansible.builtin.stat:
+        path: "{{ '/root' if ansible_user | default('root') == 'root' else '/home/' ~ ansible_user }}/.ssh/authorized_keys"
+      register: asgor_authorized_keys
+      when: asgor_ssh_hardening | bool
+
+    - name: Refuser de couper les mots de passe sans clé SSH
+      ignore_errors: false
+      ansible.builtin.assert:
+        that:
+          - asgor_authorized_keys.stat.exists
+          - asgor_authorized_keys.stat.size > 0
+        fail_msg: >-
+          Pas de clé dans authorized_keys pour {{ ansible_user | default('root') }}.
+          Désactiver les mots de passe vous bloquerait.
+      when: asgor_ssh_hardening | bool
+
+    - name: Durcir SSH (clé uniquement)
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-asgor.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          PermitRootLogin {{ asgor_ssh_permit_root }}
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          X11Forwarding no
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Recharger SSH
+      when: asgor_ssh_hardening | bool
+
+    - name: Autoriser les IP d'administration
+      community.general.ufw:
+        rule: allow
+        from_ip: '{{ item }}'
+      loop: '{{ asgor_admin_ips }}'
+      when: asgor_firewall | bool
+
+    - name: Ouvrir le port du service web au seul reverse proxy Caddy
+      community.general.ufw:
+        rule: allow
+        from_ip: '{{ item }}'
+        to_port: '{{ asgor_web_port }}'
+        proto: tcp
+        comment: 'ASGOR service web via Caddy'
+      loop: '{{ asgor_proxy_ips }}'
+      when: asgor_firewall | bool
+
+    - name: Bloquer les autres connexions entrantes et activer UFW
+      community.general.ufw:
+        state: enabled
+        direction: incoming
+        policy: deny
+      when: asgor_firewall | bool
+
+    # ---------------------------------------------------------- outils Python
+    - name: Créer un venv par outil Python
+      ansible.builtin.command:
+        cmd: 'python3 -m venv {{ asgor_root }}/venvs/{{ item.name }}'
+        creates: '{{ asgor_root }}/venvs/{{ item.name }}/bin/python'
+      loop: '{{ asgor_python_tools }}'
+      loop_control:
+        label: '{{ item.name }}'
+      when: item.enabled | bool
+
+    - name: Installer les outils Python
+      ansible.builtin.pip:
+        name: '{{ item.spec }}'
+        virtualenv: '{{ asgor_root }}/venvs/{{ item.name }}'
+      loop: '{{ asgor_python_tools }}'
+      loop_control:
+        label: '{{ item.spec }}'
+      when: item.enabled | bool
+
+    # Semgrep : abandonné (mêmes résultats qu'Opengrep, 3 à 10 fois plus lent) et
+    # désinstallé des installations existantes. Les règles semgrep-rules restent :
+    # Opengrep les utilise.
+    - name: Désinstaller Semgrep (lien dans le PATH, puis son environnement Python)
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - /usr/local/bin/semgrep
+        - '{{ asgor_root }}/venvs/semgrep'
+
+    - name: Exposer les outils Python dans le PATH
+      ansible.builtin.file:
+        src: '{{ asgor_root }}/venvs/{{ item.0.name }}/bin/{{ item.1 }}'
+        dest: '/usr/local/bin/{{ item.1 }}'
+        state: link
+      loop: "{{ asgor_python_tools | selectattr('enabled') | subelements('bins') }}"
+      loop_control:
+        label: '{{ item.1 }}'
+
+    # ------------------------------------------------------------- outils PHP
+    # Ancienne installation de Psalm et PHPStan par Composer, remplacée
+    # par les PHAR signés (voir asgor_binary_tools). Les liens /usr/local/bin/psalm et
+    # /usr/local/bin/phpstan sont remplacés par l'installation des binaires ci-dessous.
+    - name: Supprimer l'ancienne installation de Psalm et PHPStan par Composer
+      ansible.builtin.file:
+        path: '{{ asgor_root }}/php-tools'
+        state: absent
+
+    # ------------------------------------------------- binaires (épinglés)
+    - name: Installer les binaires épinglés
+      ansible.builtin.include_tasks: tasks/install_binary.yml
+      loop: "{{ asgor_binary_tools | selectattr('version', '!=', '') | list }}"
+      loop_control:
+        loop_var: tool
+        label: '{{ tool.name }} {{ tool.version }}'
+
+    # ------------------------------------ règles Semgrep/Opengrep (épinglées)
+    - name: Créer le dossier de cette version des règles Semgrep
+      ansible.builtin.file:
+        path: '{{ asgor_semgrep_rules_dir }}/{{ asgor_semgrep_rules_commit }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Télécharger les règles Semgrep avec contrôle SHA256
+      ansible.builtin.get_url:
+        url: 'https://github.com/semgrep/semgrep-rules/archive/{{ asgor_semgrep_rules_commit }}.tar.gz'
+        dest: '{{ asgor_semgrep_rules_dir }}/{{ asgor_semgrep_rules_commit }}.tar.gz'
+        checksum: 'sha256:{{ asgor_semgrep_rules_sha256 }}'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Extraire les règles Semgrep
+      ansible.builtin.unarchive:
+        src: '{{ asgor_semgrep_rules_dir }}/{{ asgor_semgrep_rules_commit }}.tar.gz'
+        dest: '{{ asgor_semgrep_rules_dir }}/{{ asgor_semgrep_rules_commit }}'
+        remote_src: true
+        extra_opts: ['--strip-components=1', '--no-same-owner', '--no-same-permissions']
+        creates: '{{ asgor_semgrep_rules_dir }}/{{ asgor_semgrep_rules_commit }}/LICENSE'
+        owner: root
+        group: root
+
+    - name: Activer cette version des règles Semgrep
+      ansible.builtin.file:
+        src: '{{ asgor_semgrep_rules_dir }}/{{ asgor_semgrep_rules_commit }}'
+        dest: '{{ asgor_semgrep_rules_dir }}/actuel'
+        state: link
+        force: true
+
+    # ------------------------------------------- phase 1b : isolation
+    - name: Créer le dossier des secrets (invisible depuis les analyses)
+      ansible.builtin.file:
+        path: '{{ asgor_etc }}/secrets'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Écrire les limites de l'isolation
+      ansible.builtin.copy:
+        dest: '{{ asgor_etc }}/sandbox.conf'
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Lu par /usr/local/sbin/asgor-sandbox — géré par Ansible
+          MEM_MAX={{ asgor_sandbox_mem_max }}
+          MEM_MAX_HAUTE={{ asgor_sandbox_mem_max_haute }}
+          CPU_QUOTA={{ asgor_sandbox_cpu_quota }}
+          RUNTIME_MAX={{ asgor_sandbox_runtime_max }}
+          DENY_CIDRS="{{ asgor_sandbox_deny_cidrs | join(' ') }}"
+          ALLOW_CIDRS="{{ asgor_sandbox_allow_cidrs | join(' ') }}"
+
+    - name: Installer le lanceur isolé et son autotest
+      ansible.builtin.copy:
+        src: 'files/{{ item }}'
+        dest: '/usr/local/sbin/{{ item }}'
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - asgor-sandbox
+        - asgor-sandbox-selftest
+
+    - name: Tester l'isolation
+      ansible.builtin.command: /usr/local/sbin/asgor-sandbox-selftest
+      register: asgor_selftest
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Résultat du test d'isolation
+      ansible.builtin.debug:
+        msg: '{{ asgor_selftest.stdout_lines }}'
+      when: not ansible_check_mode
+
+    - name: Exiger une isolation complète
+      ansible.builtin.assert:
+        that:
+          - asgor_selftest.rc == 0
+        fail_msg: "L'isolation n'est pas complète : voir les lignes ÉCHEC ci-dessus."
+        quiet: true
+      when: not ansible_check_mode
+
+    # ------------------------------------------ étape 3 : moteur d'analyse
+    # Le moteur (dossier moteur/ du dépôt) : Python, bibliothèque standard seulement.
+    - name: Créer le dossier du moteur d'analyse
+      ansible.builtin.file:
+        path: '{{ asgor_root }}/moteur'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Installer le moteur d'analyse et la configuration des outils
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../moteur/{{ item }}/'
+        dest: '{{ asgor_root }}/moteur/{{ item }}/'
+        owner: root
+        group: root
+        mode: '0644'
+        directory_mode: '0755'
+      loop:
+        - asgor_moteur
+        - conf
+      register: asgor_moteur_installe
+
+    - name: Installer les commandes asgor-scan et asgor-worker
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../moteur/bin/{{ item }}'
+        dest: '/usr/local/sbin/{{ item }}'
+        owner: root
+        group: root
+        mode: '0755'
+      loop: [asgor-scan, asgor-worker]
+
+    # ------------------------------------------- étape 4 : service web
+    - name: Créer les dossiers du service web
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ asgor_root }}/web'
+
+    # corriger_dependances.py est publié dans le dépôt asgor-tools (lien dans la page
+    # « Aide ») : le site ne le sert plus. Suppression de l'ancienne copie.
+    - name: Supprimer l'ancien dossier de téléchargement
+      ansible.builtin.file:
+        path: '{{ asgor_root }}/web/telechargements'
+        state: absent
+
+    - name: Installer le code du service web
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../web/asgor_web/'
+        dest: '{{ asgor_root }}/web/asgor_web/'
+        owner: root
+        group: root
+        mode: '0644'
+        directory_mode: '0755'
+      register: asgor_web_installe
+
+    - name: Installer la liste des dépendances épinglées du service web
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../web/requirements.txt'
+        dest: '{{ asgor_root }}/web/requirements.txt'
+        owner: root
+        group: root
+        mode: '0644'
+      register: asgor_web_requirements
+
+    - name: Créer l'environnement Python du service web
+      ansible.builtin.command:
+        cmd: 'python3 -m venv {{ asgor_root }}/venvs/web'
+        creates: '{{ asgor_root }}/venvs/web/bin/python'
+
+    # Versions exactes et sommes SHA256 de chaque fichier (règle des 14 jours).
+    - name: Installer les dépendances du service web (contrôle des sommes)
+      ansible.builtin.command:
+        cmd: >-
+          {{ asgor_root }}/venvs/web/bin/python -m pip install --disable-pip-version-check
+          --no-input --require-hashes --no-deps --only-binary=:all:
+          -r {{ asgor_root }}/web/requirements.txt
+      when: asgor_web_requirements.changed
+
+    - name: Vérifier la cohérence des dépendances du service web
+      ansible.builtin.command:
+        cmd: '{{ asgor_root }}/venvs/web/bin/python -m pip check --disable-pip-version-check'
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Installer la commande asgor-web
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../web/bin/asgor-web'
+        dest: /usr/local/sbin/asgor-web
+        owner: root
+        group: root
+        mode: '0755'
+      register: asgor_web_commande
+
+    - name: Noter si le code du moteur ou du service web a changé
+      ansible.builtin.set_fact:
+        asgor_code_change: "{{ (asgor_moteur_installe is changed) or (asgor_web_installe is changed) or (asgor_web_requirements is changed) or (asgor_web_commande is changed) }}"
+
+    # ------------------------------- services systemd (démarrage automatique)
+    - name: Installer le service asgor-worker
+      ansible.builtin.copy:
+        src: files/asgor-worker.service
+        dest: /etc/systemd/system/asgor-worker.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: asgor_unite_worker
+
+    - name: Installer le service asgor-web (adresse d'écoute et proxy autorisé)
+      ansible.builtin.template:
+        src: templates/asgor-web.service.j2
+        dest: /etc/systemd/system/asgor-web.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: asgor_unite_web
+
+    - name: Activer et démarrer les services (redémarrés si le code a changé)
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+        enabled: true
+        state: "{{ 'restarted' if (asgor_unite_worker.changed or asgor_unite_web.changed or asgor_code_change | default(false)) else 'started' }}"
+        daemon_reload: true
+      loop: [asgor-worker, asgor-web]
+
+    # ---------------------------------------------------------------- bilan
+    - name: Lister les outils installés
+      # Chaque appel est limité à 30 s et ne lit rien au clavier : un outil
+      # bloqué (vérification de mise à jour en ligne, question) affiche « délai dépassé ».
+      ansible.builtin.shell: |
+        set -o pipefail
+        export SEMGREP_ENABLE_VERSION_CHECK=0 SEMGREP_SEND_METRICS=off
+        export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
+        for t in opengrep bandit pip-audit psalm phpstan composer gitleaks trivy osv-scanner; do
+          if ! command -v "$t" >/dev/null 2>&1; then
+            printf '%-12s %s\n' "$t" "non installé"
+            continue
+          fi
+          case "$t" in
+            gitleaks) arg="version" ;;
+            *)        arg="--version" ;;
+          esac
+          out=$(timeout 30 "$t" "$arg" </dev/null 2>&1)
+          rc=$?
+          if [ "$rc" -eq 124 ]; then
+            out="délai dépassé (30 s)"
+          fi
+          printf '%-12s %s\n' "$t" "$(printf '%s\n' "$out" | grep -m1 -v '^\s*$')"
+        done
+      args:
+        executable: /bin/bash
+      register: asgor_versions
+      changed_when: false
+      check_mode: false
+
+    - name: Résumé
+      ansible.builtin.debug:
+        msg: '{{ asgor_versions.stdout_lines }}'
+
+    # Versions affichées par le service web et recopiées dans chaque rapport.
+    # Semgrep n'y figure pas : le moteur ne l'utilise plus (Opengrep seul).
+    - name: Relever les versions des outils utilisés par le moteur
+      ansible.builtin.shell: |
+        set -o pipefail
+        version() { timeout 30 "$@" </dev/null 2>&1 | grep -oE '[0-9]+[.][0-9]+[.][0-9]+' | head -n 1; }
+        python3 -I -c 'import json, sys; print(json.dumps(dict(zip(sys.argv[1::2], sys.argv[2::2])), indent=2))' \
+          Gitleaks    "$(version gitleaks version)" \
+          Composer    "$(version composer --version)" \
+          pip-audit   "$(version pip-audit --version)" \
+          OSV-Scanner "$(version osv-scanner --version)" \
+          Trivy       "$(version trivy --version)" \
+          Psalm       "$(version psalm --version)" \
+          PHPStan     "$(version phpstan --version)" \
+          Opengrep    "$(version opengrep --version)" \
+          Bandit      "$(version bandit --version)"
+      args:
+        executable: /bin/bash
+      environment:
+        COMPOSER_ALLOW_SUPERUSER: '1'
+      register: asgor_outils
+      changed_when: false
+      check_mode: false
+
+    - name: Écrire les versions des outils (outils.json)
+      ansible.builtin.copy:
+        dest: '{{ asgor_root }}/outils.json'
+        owner: root
+        group: root
+        mode: '0644'
+        content: "{{ asgor_outils.stdout | from_json | to_nice_json }}"

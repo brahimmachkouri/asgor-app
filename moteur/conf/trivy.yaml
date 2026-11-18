@@ -1,0 +1,5 @@
+# Configuration Trivy d'ASGOR.
+# Ce fichier remplace le trivy.yaml du dépôt analysé, qui n'est jamais lu.
+scan:
+  scanners:
+    - vuln

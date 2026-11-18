@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Fichiers temporaires et de sauvegarde des éditeurs
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+.#*
+
+# Ansible
+*.retry
+
+# Captures d'écran des vérifications (Playwright)
+.playwright-mcp/
+
+# Exports d'analyses de dépôts tiers (rapports JSON, SARIF) : jamais dans Git
+scans/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Adresses propres au réseau d'installation (exemples : *.exemple)
+asgor-ansible/inventory.ini
+asgor-ansible/reseau.yml

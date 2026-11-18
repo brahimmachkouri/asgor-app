@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block titre %}Aide{% endblock %}
+{% block contenu %}
+<section class="pile">
+  <div class="pile-serree">
+    <span class="surtitre">Aide</span>
+    <h1 class="titre-principal">Guide d'utilisation d'ASGOR</h1>
+  </div>
+  {% if sommaire %}
+  <nav class="carte sommaire-aide" aria-label="Sommaire">
+    <ul>
+      {% for ancre, titre in sommaire %}<li><a href="#{{ ancre }}">{{ titre }}</a></li>{% endfor %}
+    </ul>
+  </nav>
+  {% endif %}
+  <article class="carte guide pile-serree">
+    {{ contenu }}
+  </article>
+  <p><a href="#">Remonter en haut de la page</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,55 @@
+# ASGOR — service web (géré par Ansible : templates/asgor-web.service.j2)
+# Compte asgor-web, aucun droit root. Lit la base et les rapports, dépose les
+# demandes dans /var/lib/asgor/file. Ne lance aucun outil.
+[Unit]
+Description=ASGOR service web
+After=network.target
+RequiresMountsFor=/var/lib/asgor
+
+[Service]
+Type=exec
+User=asgor-web
+Group=asgor-web
+ExecStart=/usr/local/sbin/asgor-web --hote 0.0.0.0 --port {{ asgor_web_port }} --proxy {{ asgor_proxy_ips | join(' --proxy ') }}
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+# Système en lecture seule ; seule la file des demandes est accessible en écriture.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/asgor/file
+InaccessiblePaths=-/etc/asgor/secrets -/etc/ssh -/mnt/data -/root -/var/lib/asgor/jobs -/var/lib/asgor/cache -/var/lib/asgor/logs
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Réseau : n'échange qu'avec la VM elle-même (tunnel SSH) et le reverse proxy
+# Caddy ; aucune connexion sortante. S'ajoute à UFW (port {{ asgor_web_port }} ouvert à
+# Caddy seul) et au filtrage des IP par Caddy.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost {{ asgor_proxy_ips | join(' ') }}
+
+MemoryMax=512M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

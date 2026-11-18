@@ -1,0 +1,29 @@
+# Configuration Gitleaks d'ASGOR.
+# Les règles par défaut de Gitleaks, sans aucune exclusion venant du dépôt analysé,
+# plus une règle ASGOR pour les secrets écrits dans un tableau ou une constante PHP.
+title = "ASGOR"
+
+[extend]
+useDefault = true
+
+# La règle générique de Gitleaks ne voit pas $config['api_key'] = '…' ni
+# 'secret' => '…' ni define('X_SECRET', '…') (vérifié avec le dépôt
+# piège).
+# Version 2 : la version 1 donnait des faux positifs sur laravel et
+# roundcube. Corrigé : la virgule n'est acceptée que dans define(…) (plus de listes
+# de noms ni d'appels get('cle', 'défaut')), l'espacement ne traverse plus une ligne,
+# et une valeur sans aucun chiffre (nom de classe, de fichier, de champ) est ignorée.
+# Testée : 3 vrais secrets trouvés, 0 alerte de cette règle sur 13 contre-exemples
+# (dont 9 lignes réelles de laravel/laravel et roundcube/roundcubemail).
+[[rules]]
+id = "asgor-secret-tableau-php"
+description = "Secret dans un tableau ou une constante PHP"
+regex = '''(?i)(?:['"][\w.-]{0,40}(?:api[_-]?key|secret|token|passw(?:or)?d|auth|credential|private[_-]?key)[\w.-]{0,20}['"][ \t]*\]?[ \t]*(?:=>|=)|define\([ \t]*['"][\w.-]{0,40}(?:api[_-]?key|secret|token|passw(?:or)?d|auth|credential|private[_-]?key)[\w.-]{0,20}['"][ \t]*,)[ \t]*['"]([\w.=+/-]{12,150})['"]'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["key", "secret", "token", "passw", "auth", "credential"]
+
+[[rules.allowlists]]
+description = "valeur sans chiffre : un nom (classe, fichier, champ), pas un secret aléatoire"
+regexTarget = "secret"
+regexes = ['''^[A-Za-z_./-]+$''']

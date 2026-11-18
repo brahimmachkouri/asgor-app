@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block titre %}Analyse en cours{% endblock %}
+{% block contenu %}
+{% if en_file %}
+<section class="pile-serree">
+  <span class="surtitre">Demande enregistrée</span>
+  <h1 class="titre-depot">En attente du service d'analyse</h1>
+  <p>La demande va être prise en compte dans quelques secondes. Cette page se met à jour toute seule.</p>
+</section>
+{% else %}
+<section class="pile-serree">
+  <span class="surtitre">{% if analyse.etat == "en_attente" %}Analyse en attente{% else %}Analyse en cours{% endif %}</span>
+  <h1 class="titre-depot">github.com/{{ analyse.proprietaire }}/{{ analyse.nom }}</h1>
+  <div class="meta">
+    {% if analyse.branche %}<span>Branche <strong>{{ analyse.branche }}</strong></span>{% endif %}
+    {% if analyse.commit_sha %}<span>Commit <strong class="mono">{{ analyse.commit_sha | court }}</strong></span>{% endif %}
+    {% if analyse.debut %}<span>Démarrée à <strong>{{ analyse.debut | heure }}</strong></span>{% endif %}
+    {% if ecoule is not none %}<span>Temps écoulé <strong>{{ ecoule | duree }}</strong></span>{% endif %}
+    {% if not analyse.historique_complet %}<span>Historique Git <strong>non analysé</strong></span>{% endif %}
+  </div>
+</section>
+
+<section class="carte pile-serree">
+  {% set pourcentage = (faits * 100 // nb_groupes) if nb_groupes else 0 %}
+  <div class="ligne-entre">
+    <strong>
+      {% if analyse.etat == "en_attente" %}
+        {% if position %}{{ position }} {{ pluriel(position, "analyse") }} avant la vôtre{% else %}Démarrage imminent{% endif %}
+      {% else %}
+        Étape {{ [faits + 1, nb_groupes] | min }} sur {{ nb_groupes }}
+      {% endif %}
+    </strong>
+    <span>{{ pourcentage }} %</span>
+  </div>
+  <div class="barre" role="progressbar" aria-label="Progression de l'analyse" aria-valuenow="{{ pourcentage }}" aria-valuemin="0" aria-valuemax="100">
+    <div class="barre-remplie {{ pourcentage | classe_largeur }}"></div>
+  </div>
+  <p class="petit">La page se met à jour toute seule. Vous pouvez la fermer : le rapport restera disponible à cette adresse.</p>
+</section>
+
+<section class="carte liste-etapes">
+  {% for e in etapes %}
+  {% set statut = STATUTS.get(e.statut, (e.statut, "attente")) %}
+  <div class="etape etape-{{ statut[1] }}">
+    <span class="badge badge-{{ statut[1] }}">{{ statut[0] }}</span>
+    <div class="etape-texte">
+      <span class="etape-nom">{{ e.cle | groupe }}</span>
+      {% if e.detail %}<span class="etape-detail">{{ e.detail }}</span>{% endif %}
+    </div>
+    <span class="mono etape-duree">{% if e.duree_s %}{{ e.duree_s | duree }}{% endif %}</span>
+  </div>
+  {% endfor %}
+</section>
+
+<form method="post" action="/analyses/{{ identifiant }}/annuler" class="actions">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button type="submit" class="bouton bouton-secondaire">Annuler l'analyse</button>
+</form>
+{% endif %}
+{% endblock %}

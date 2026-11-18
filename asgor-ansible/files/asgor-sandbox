@@ -1,0 +1,146 @@
+#!/bin/bash
+# asgor-sandbox — lance une commande isolée pour une analyse ASGOR.
+#
+# Usage : asgor-sandbox fetch|scan <id-analyse> -- commande [arguments...]
+#
+#   fetch : réseau autorisé vers Internet, réseau interne et VM interdits.
+#           Pour : git clone, composer install, mise à jour des bases Trivy/OSV.
+#   scan  : aucun réseau.
+#           Pour : Gitleaks, Psalm, Opengrep, Bandit, audits hors ligne.
+#
+# Dans les deux cas : compte asgor, système en lecture seule, seul le dossier
+# /var/lib/asgor/jobs/<id> est accessible en écriture, les autres analyses,
+# la base, les rapports et les clés SSH sont invisibles.
+# À lancer en root (systemd-run crée une unité systemd temporaire).
+
+set -euo pipefail
+
+JOBS=/var/lib/asgor/jobs
+CACHE=/var/lib/asgor/cache
+
+# Valeurs par défaut, remplacées par /etc/asgor/sandbox.conf
+MEM_MAX=4G
+# Mémoire d'une étape lourde (Psalm), demandée par ASGOR_SANDBOX_MEMOIRE=haute
+MEM_MAX_HAUTE=6G
+CPU_QUOTA=300%
+RUNTIME_MAX=1800
+DENY_CIDRS="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 ::1/128 fc00::/7 fe80::/10"
+ALLOW_CIDRS="127.0.0.53/32"
+# shellcheck source=/dev/null
+[ -r /etc/asgor/sandbox.conf ] && . /etc/asgor/sandbox.conf
+
+# Seules deux valeurs sont possibles : la valeur normale ou la valeur haute,
+# toutes deux fixées par /etc/asgor/sandbox.conf. L'appelant ne choisit pas
+# un nombre lui-même.
+case "${ASGOR_SANDBOX_MEMOIRE:-normale}" in
+  normale) ;;
+  haute)   MEM_MAX=$MEM_MAX_HAUTE ;;
+  *)       echo "asgor-sandbox : ASGOR_SANDBOX_MEMOIRE doit valoir normale ou haute" >&2; exit 2 ;;
+esac
+
+usage() {
+  echo "Usage : asgor-sandbox fetch|scan <id-analyse> -- commande [arguments...]" >&2
+  exit 2
+}
+
+[ "$#" -ge 4 ] || usage
+profile=$1
+id=$2
+shift 2
+[ "$1" = "--" ] || usage
+shift
+
+[ "$(id -u)" -eq 0 ] || { echo "asgor-sandbox : à lancer en root" >&2; exit 2; }
+[[ $id =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { echo "asgor-sandbox : identifiant invalide" >&2; exit 2; }
+
+job=$JOBS/$id
+install -d -o asgor -g asgor -m 0700 "$job" "$job/src" "$job/out" "$job/home"
+
+props=(
+  -p User=asgor
+  -p Group=asgor
+  -p UMask=0077
+  -p NoNewPrivileges=yes
+  -p ProtectSystem=strict
+  -p ProtectHome=yes
+  -p PrivateTmp=yes
+  -p PrivateDevices=yes
+  -p PrivateIPC=yes
+  -p ProtectKernelTunables=yes
+  -p ProtectKernelModules=yes
+  -p ProtectKernelLogs=yes
+  -p ProtectControlGroups=yes
+  -p ProtectClock=yes
+  -p ProtectHostname=yes
+  -p ProtectProc=invisible
+  -p RestrictNamespaces=yes
+  -p RestrictRealtime=yes
+  -p RestrictSUIDSGID=yes
+  -p LockPersonality=yes
+  -p CapabilityBoundingSet=
+  -p AmbientCapabilities=
+  -p SystemCallArchitectures=native
+  -p SystemCallFilter=@system-service
+  # /var/lib/asgor est remplacé par un dossier vide ; seuls l'analyse et le cache réapparaissent
+  -p TemporaryFileSystem=/var/lib/asgor
+  -p "BindPaths=$job"
+  # /mnt/data : le disque de données, dont /var/lib/asgor est un montage.
+  # Sans cette ligne, les autres analyses seraient lisibles par ce chemin.
+  -p "InaccessiblePaths=-/etc/asgor/secrets -/etc/ssh -/mnt/data"
+  -p "MemoryMax=$MEM_MAX"
+  -p MemorySwapMax=0
+  -p "CPUQuota=$CPU_QUOTA"
+  -p TasksMax=512
+  -p "RuntimeMaxSec=$RUNTIME_MAX"
+  -p LimitCORE=0
+)
+
+envs=(
+  -E "HOME=$job/home"
+  -E PATH=/usr/local/bin:/usr/bin:/bin
+  -E LANG=C.UTF-8
+  -E SEMGREP_ENABLE_VERSION_CHECK=0
+  -E SEMGREP_SEND_METRICS=off
+  -E "COMPOSER_HOME=$CACHE/composer"
+  -E COMPOSER_NO_INTERACTION=1
+  -E COMPOSER_ALLOW_SUPERUSER=0
+  -E "TRIVY_CACHE_DIR=$CACHE/trivy"
+  -E GIT_TERMINAL_PROMPT=0
+  -E GIT_ALLOW_PROTOCOL=https
+  -E GIT_CONFIG_NOSYSTEM=1
+)
+
+case "$profile" in
+  fetch)
+    props+=(
+      -p "BindPaths=$CACHE"
+      -p "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"
+      -p "IPAddressDeny=$DENY_CIDRS"
+      -p "IPAddressAllow=$ALLOW_CIDRS"
+    )
+    ;;
+  scan)
+    props+=(
+      -p "BindReadOnlyPaths=$CACHE"
+      -p PrivateNetwork=yes
+      -p RestrictAddressFamilies=AF_UNIX
+    )
+    envs+=(-E COMPOSER_DISABLE_NETWORK=1)
+    ;;
+  *)
+    usage
+    ;;
+esac
+
+# Avec ASGOR_SANDBOX_STATS=1, systemd-run affiche à la fin la durée et la
+# mémoire maximale de l'étape (le moteur d'analyse s'en sert pour ses mesures).
+silence=(--quiet)
+if [ "${ASGOR_SANDBOX_STATS:-}" = "1" ]; then
+  silence=()
+fi
+
+exec systemd-run "${silence[@]}" --wait --pipe --collect \
+  --service-type=exec \
+  --unit="asgor-$profile-$id-$$" \
+  --working-directory="$job" \
+  "${props[@]}" "${envs[@]}" -- "$@"

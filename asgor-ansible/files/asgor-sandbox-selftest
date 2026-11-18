@@ -1,0 +1,75 @@
+#!/bin/bash
+# asgor-sandbox-selftest — vérifie que l'isolation des analyses fonctionne.
+# Chaque ligne affiche OK ou ÉCHEC. Code de sortie 0 seulement si tout est OK.
+# À lancer en root.
+
+set -uo pipefail
+
+S=/usr/local/sbin/asgor-sandbox
+JOBS=/var/lib/asgor/jobs
+id="selftest-$$"
+other="selftest-autre-$$"
+fail=0
+
+ok() { printf 'OK     %s\n' "$1"; }
+ko() { printf 'ÉCHEC  %s\n' "$1"; fail=1; }
+
+# La commande doit réussir
+doit_reussir() {
+  local d=$1; shift
+  if "$@" >/dev/null 2>&1; then ok "$d"; else ko "$d"; fi
+}
+# La commande doit échouer (accès refusé)
+doit_echouer() {
+  local d=$1; shift
+  if "$@" >/dev/null 2>&1; then ko "$d"; else ok "$d"; fi
+}
+sb() { "$S" "$1" "$id" -- /bin/bash -c "$2"; }
+
+nettoyer() { rm -rf "${JOBS:?}/$id" "${JOBS:?}/$other"; }
+trap nettoyer EXIT
+
+# Une autre analyse, qui doit rester invisible
+install -d -o asgor -g asgor -m 0700 "$JOBS/$other"
+echo secret > "$JOBS/$other/donnee"
+chown asgor:asgor "$JOBS/$other/donnee"
+
+vm_ip=$(hostname -I | awk '{print $1}')
+
+echo "== Emplacement des données"
+doit_reussir "données sur le disque de données, pas sur le disque système" \
+  bash -c 'findmnt -n -o SOURCE --mountpoint /var/lib/asgor | grep -q "\[/asgor\]$" && findmnt -n --mountpoint /mnt/data >/dev/null'
+
+echo "== Profil scan (sans réseau)"
+doit_reussir "tourne avec le compte asgor"           sb scan '[ "$(id -un)" = asgor ]'
+doit_reussir "écriture dans le dossier de l'analyse"   sb scan 'touch "$HOME/../out/test"'
+doit_echouer "pas d'écriture dans /opt/asgor"        sb scan 'touch /opt/asgor/test'
+doit_echouer "pas d'écriture dans /etc"                sb scan 'touch /etc/asgor-test'
+doit_echouer "autre analyse invisible"                 sb scan "cat $JOBS/$other/donnee"
+doit_echouer "clés SSH du compte invisibles"           sb scan 'ls /var/lib/asgor/.ssh'
+doit_echouer "base de données invisible"               sb scan 'ls /var/lib/asgor/database'
+doit_echouer "disque de données invisible (/mnt/data)" sb scan 'ls /mnt/data/asgor'
+doit_echouer "autre analyse invisible par /mnt/data"   sb scan "cat /mnt/data/asgor/jobs/$other/donnee"
+doit_echouer "/root invisible"                         sb scan 'ls /root'
+doit_echouer "configuration SSH invisible"             sb scan 'cat /etc/ssh/sshd_config'
+doit_echouer "pas d'élévation de droits (sudo)"        sb scan 'sudo -n true'
+doit_echouer "pas de réseau vers Internet"             sb scan 'timeout 5 bash -c "</dev/tcp/1.1.1.1/443"'
+doit_reussir "limite de mémoire haute acceptée"        env ASGOR_SANDBOX_MEMOIRE=haute "$S" scan "$id" -- /bin/true
+doit_echouer "limite de mémoire libre refusée (12G)"   env ASGOR_SANDBOX_MEMOIRE=12G "$S" scan "$id" -- /bin/true
+
+echo "== Outils dans le profil scan"
+for t in opengrep bandit pip-audit psalm phpstan composer trivy osv-scanner; do
+  doit_reussir "$t démarre" sb scan "$t --version"
+done
+doit_reussir "gitleaks démarre" sb scan 'gitleaks version'
+
+echo "== Profil fetch (Internet seulement)"
+doit_reussir "accès à GitHub en HTTPS"                 sb fetch 'git ls-remote https://github.com/gitleaks/gitleaks HEAD'
+doit_echouer "pas d'accès à la VM (127.0.0.1:22)"      sb fetch 'timeout 5 bash -c "</dev/tcp/127.0.0.1/22"'
+doit_echouer "pas d'accès au réseau interne ($vm_ip:22)" sb fetch "timeout 5 bash -c '</dev/tcp/$vm_ip/22'"
+doit_echouer "protocole git file:// refusé"            sb fetch 'git -c init.defaultBranch=main init -q /tmp/r && git -C /tmp/r -c user.name=t -c user.email=t@t commit -q --allow-empty -m t && git clone -q file:///tmp/r /tmp/c'
+doit_echouer "autre analyse invisible"                 sb fetch "cat $JOBS/$other/donnee"
+
+echo
+if [ "$fail" -eq 0 ]; then echo "Isolation : tous les contrôles sont OK."; else echo "Isolation : au moins un contrôle a échoué."; fi
+exit "$fail"

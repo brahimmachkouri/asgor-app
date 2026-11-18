@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block titre %}Rapport {{ analyse.proprietaire }}/{{ analyse.nom }}{% endblock %}
+{% block navigation_page %}{% if rapport.qualite %}<a href="#qualite">Qualité du code</a>{% endif %}{% endblock %}
+{% block contenu %}
+{% set note = rapport.note %}
+{% set depot = rapport.depot %}
+<section class="ligne-entre ligne-bas">
+  <div class="pile-serree">
+    <span class="surtitre">Rapport d'analyse</span>
+    <h1 class="titre-depot">github.com/{{ analyse.proprietaire }}/{{ analyse.nom }}</h1>
+    <div class="meta">
+      {% if depot.branche %}<span>Branche <strong>{{ depot.branche }}</strong></span>{% endif %}
+      {% if depot.commit %}<span>Commit <strong class="mono">{{ depot.commit | court }}</strong></span>{% endif %}
+      <span>Analysé le <strong>{{ analyse.fin | date }}</strong></span>
+      <span>Durée <strong>{{ analyse.duree_s | duree }}</strong></span>
+      {% if rapport.analyse.historique_complet %}
+      <span>Historique <strong>{{ depot.nb_commits | nombre }} {{ pluriel(depot.nb_commits, "commit") }}</strong></span>
+      {% else %}
+      <span>Historique Git <strong>non analysé</strong></span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="actions">
+    <form method="post" action="/analyses/{{ identifiant }}/relancer">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="bouton bouton-principal">Relancer l'analyse</button>
+    </form>
+    <a class="bouton bouton-secondaire" href="/analyses/{{ identifiant }}/rapport.json">Exporter JSON</a>
+    <a class="bouton bouton-secondaire" href="/analyses/{{ identifiant }}/rapport.sarif">Exporter SARIF</a>
+  </div>
+</section>
+
+<section class="carte resume" aria-label="Résumé">
+  <div class="note-globale">
+    <span class="surtitre-majuscules">Note globale</span>
+    <div class="grande-note {{ note.globale | classe_note }}">{{ note.globale }}</div>
+  </div>
+  <div class="domaines">
+    {% for cle in ("secrets", "dependances", "code") %}
+    {% set d = note.domaines[cle] %}
+    <div class="domaine">
+      <span class="domaine-nom">{{ cle | domaine }}</span>
+      <div class="barre-domaine"><div class="barre-domaine-remplie {{ d.score | classe_largeur }} {{ d.lettre | classe_note }}"></div></div>
+      <span class="domaine-score"><span class="mono">{{ d.score }} <span class="lettre">{{ d.lettre }}</span></span> · {{ d.problemes | nombre }} {{ pluriel(d.problemes, "problème") }}</span>
+    </div>
+    {% if d.evaluation != "complète" %}
+    <p class="petit">{{ cle | domaine }} : évaluation incomplète (échec de {{ d.outils_en_echec | join(", ") }}).</p>
+    {% endif %}
+    {% endfor %}
+    <div class="pile-serree">
+      {% for p in note.plafonnements %}
+      <p class="encart encart-alerte"><strong>Note {{ p.note_max }}</strong> : {{ p.raison }}.</p>
+      {% endfor %}
+      {% if note.domaines.secrets.problemes == 0 and rapport.analyse.historique_complet %}
+      <p class="encart encart-ok">Aucun secret trouvé dans les {{ depot.nb_commits | nombre }} {{ pluriel(depot.nb_commits, "commit") }} de l'historique.</p>
+      {% endif %}
+      {% for a in rapport.avertissements %}
+      <p class="encart encart-info">{{ a }}</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="pile">
+  <div class="ligne-entre ligne-base">
+    <h2 class="titre-section">Problèmes trouvés</h2>
+    <span>{{ compte | join(" · ") if compte else "aucun" }}</span>
+  </div>
+  {% if transmis %}
+  <p class="encart encart-ok">Demande transmise : la note sera recalculée dans quelques secondes. Rechargez la page pour la voir.</p>
+  {% endif %}
+  {% if nb_problemes > problemes | length %}
+  <p class="encart encart-info">Les {{ problemes | length }} problèmes les plus graves sont affichés sur {{ nb_problemes }}. Les exports JSON et SARIF contiennent tout.</p>
+  {% endif %}
+  <form method="post" action="/analyses/{{ identifiant }}/ecarter" class="pile">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if problemes %}
+  <div class="carte pile-serree ecart">
+    <h3 class="titre-section-petit">Écarter des faux positifs</h3>
+    <p class="petit">Cochez les résultats, ou choisissez un groupe ci-dessous. Un résultat écarté ne compte plus dans la note, pour cette analyse et les suivantes de ce dépôt. Il reste visible dans « Résultats écartés » et peut être rétabli.</p>
+    <label for="motif">Motif (obligatoire)</label>
+    <input id="motif" name="motif" type="text" class="saisie saisie-motif" required minlength="3" maxlength="{{ motif_max }}" placeholder="ex. : vecteurs de test cryptographiques, clé d'exemple de la documentation">
+    <div><button type="submit" class="bouton bouton-secondaire">Écarter la sélection</button></div>
+    {% if groupes %}
+    <ul class="liste-compacte">
+      {% for g in groupes %}
+      <li><button type="submit" name="groupe" value="{{ g.cle }}" class="bouton-lien">Écarter tout ce groupe</button> — {{ g.nombre }} résultats {{ "du fichier" if g.sorte == "fichier" else "de la règle" }} <span class="mono">{{ g.valeur }}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% for p in problemes %}
+  <article class="carte probleme">
+    <div class="probleme-entete">
+      {% if p.id %}<input type="checkbox" name="ids" value="{{ p.id }}" id="c-{{ p.id }}" aria-label="Sélectionner ce résultat">{% endif %}
+      <span class="badge gravite-{{ CLASSE_GRAVITE.get(p.gravite, 'moyenne') }}">{{ p.gravite }}</span>
+      <span class="etiquette-grise">{{ p.domaine | domaine }}</span>
+      <h3 class="probleme-titre">{{ p.titre }}</h3>
+    </div>
+    <div class="meta">
+      {% if p.fichier %}<span class="mono emplacement">{{ p.fichier }}{% if p.ligne %}:{{ p.ligne }}{% endif %}</span>{% endif %}
+      <span>Détecté par <strong>{{ p.outils | join(", ") }}</strong></span>
+      {% if p.regle %}<span class="mono petit">{{ p.regle }}</span>{% endif %}
+    </div>
+    {% if p.paquet %}
+    <p>Paquet <strong class="mono">{{ p.paquet }}</strong>{% if p.version %} en version <span class="mono">{{ p.version }}</span>{% endif %}{% if p.version_corrigee %} — version corrigée : <strong class="mono">{{ p.version_corrigee }}</strong>{% endif %}.</p>
+    {% endif %}
+    {% if p.secret_masque %}
+    <p>Valeur masquée : <span class="mono">{{ p.secret_masque }}</span>{% if p.commit %} — commit <span class="mono">{{ p.commit | court }}</span>{% endif %}{% if p.occurrences and p.occurrences > 1 %} — {{ p.occurrences | nombre }} occurrences dans ce fichier (lignes et commits confondus){% endif %}.</p>
+    {% if p.a_verifier %}<p class="encart encart-info">Secret à vérifier : fichier de test, de documentation ou d'exemple. Note D au maximum tant qu'il n'est pas écarté.</p>{% endif %}
+    {% endif %}
+    {% if p.domaine == "secrets" %}{% set gh = lien_github(depot, p) %}{% if gh %}
+    <p><a href="{{ gh }}" target="_blank" rel="noopener noreferrer nofollow">Voir sur GitHub</a>{% if p.occurrences and p.occurrences > 1 %} (première occurrence){% endif %}</p>
+    {% endif %}{% endif %}
+    {% if p.explication %}<p class="explication">{{ p.explication }}</p>{% endif %}
+    {% if p.correction %}<p><strong>À faire :</strong> {{ p.correction }}</p>{% endif %}
+    {% if p.identifiants or p.references %}
+    <p class="petit">
+      {{ p.identifiants | join(", ") if p.identifiants }}
+      {% for r in p.references or [] %}
+        {% set lien = lien_sur(r) %}
+        {% if lien %}<a href="{{ lien }}" target="_blank" rel="noopener noreferrer nofollow">référence {{ loop.index }}</a>{% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+  </article>
+  {% else %}
+  <p class="carte vide">Aucun problème trouvé.</p>
+  {% endfor %}
+  {% if problemes | length > 5 %}<div><button type="submit" class="bouton bouton-secondaire">Écarter la sélection</button></div>{% endif %}
+  </form>
+</section>
+
+{% if ecartes %}
+<section class="pile" id="ecartes">
+  <h2 class="titre-section">Résultats écartés ({{ nb_ecartes }})</h2>
+  <form method="post" action="/analyses/{{ identifiant }}/retablir" class="pile-serree">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <ul class="liste-compacte">
+      {% for p, info in ecartes %}
+      <li>
+        <input type="checkbox" name="ids" value="{{ p.id }}" aria-label="Sélectionner ce résultat">
+        <span class="badge gravite-{{ CLASSE_GRAVITE.get(p.gravite, 'moyenne') }}">{{ p.gravite }}</span>
+        {{ p.titre }} — <span class="mono">{{ p.fichier }}{% if p.ligne %}:{{ p.ligne }}{% endif %}</span>
+        {% if info %}<br><span class="petit">Écarté le {{ info.le | date }} depuis {{ info.ip or "adresse inconnue" }} : « {{ info.motif }} »</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <div><button type="submit" class="bouton bouton-secondaire">Rétablir la sélection</button></div>
+  </form>
+</section>
+{% endif %}
+
+{% if rapport.qualite %}
+{% set q = rapport.qualite %}
+<section class="pile" id="qualite">
+  <details class="carte qualite">
+    <summary><strong>Qualité du code</strong> — {{ q.nb_erreurs | nombre }} {{ pluriel(q.nb_erreurs, "erreur") }} dans {{ q.nb_fichiers | nombre }} {{ pluriel(q.nb_fichiers, "fichier") }} (PHPStan niveau {{ q.niveau }}, <strong>sans effet sur la note</strong>)</summary>
+    <div class="pile-serree">
+      <h3 class="titre-section-petit">Par type</h3>
+      <ul class="liste-compacte">
+        {% for t in q.par_type %}<li><span class="mono">{{ t.nom }}</span> : {{ t.nombre }}</li>{% endfor %}
+      </ul>
+      <h3 class="titre-section-petit">Fichiers les plus concernés</h3>
+      <ul class="liste-compacte">
+        {% for f in q.par_fichier[:10] %}<li><span class="mono">{{ f.nom }}</span> : {{ f.nombre }}</li>{% endfor %}
+      </ul>
+      <h3 class="titre-section-petit">Erreurs{% if q.erreurs_tronquees %} (les {{ q.erreurs | length }} premières){% endif %}</h3>
+      <ul class="liste-compacte">
+        {% for e in q.erreurs %}<li><span class="mono">{{ e.fichier }}:{{ e.ligne }}</span> — {{ e.message }}</li>{% endfor %}
+      </ul>
+    </div>
+  </details>
+  <p><a href="#">Remonter en haut de la page</a></p>
+</section>
+{% endif %}
+
+<section class="deux-colonnes">
+  <div class="carte pile-serree">
+    <h2 class="titre-section-petit">Historique de ce dépôt</h2>
+    {% for h in historique %}
+    <div class="historique">
+      <span class="pastille petite {{ h.note | classe_note }}">{{ h.note }}</span>
+      {% if h.id == identifiant %}<span>{{ h.fin | date }} (cette analyse)</span>{% else %}<a href="/analyses/{{ h.id }}">{{ h.fin | date }}</a>{% endif %}
+      <span class="mono petit">{{ h.commit_sha | court }}</span>
+    </div>
+    {% else %}
+    <p class="petit">Aucune autre analyse visible de ce dépôt.</p>
+    {% endfor %}
+  </div>
+  <div class="carte pile-serree">
+    <h2 class="titre-section-petit">Comment la note est calculée</h2>
+    <ul class="liste-explications">
+      <li>Chaque domaine reçoit un score de 0 à 100. La note globale est la plus basse des trois lettres.</li>
+      <li><strong>F</strong> : secret détecté (fichiers ou historique), ou faille critique.</li>
+      <li><strong>D au maximum</strong> : secret « à vérifier » (fichier de test, de documentation ou d'exemple). Un résultat écarté comme faux positif ne compte plus.</li>
+      <li><strong>C au maximum</strong> : injection SQL, XSS ou injection de commande détectée par l'analyse de flux.</li>
+      <li><strong>B au maximum</strong> : faille élevée corrigeable dans une dépendance, application sans fichier de verrouillage, historique Git non analysé, outil en échec, ou problème moyen.</li>
+      <li><strong>A</strong> : aucun problème moyen ou plus grave.</li>
+    </ul>
+  </div>
+</section>
+
+{% if rapport.outils %}
+<section class="petit pied">
+  {% if rapport.outils_non_lances is defined %}Outils lancés{% else %}Outils{% endif %} : {% for nom, version in rapport.outils | dictsort %}{{ nom }} {{ version }}{% if not loop.last %} · {% endif %}{% endfor %}
+  {% if rapport.outils_non_lances %}<br>Non lancés, rien à analyser pour ce dépôt : {{ rapport.outils_non_lances | join(", ") }}.{% endif %}
+</section>
+{% endif %}
+{% endblock %}
