@@ -8,6 +8,8 @@ On colle l'adresse d'un dépôt GitHub public, l'analyse tourne, on obtient une 
 - **Prudent** : aucun code du dépôt analysé n'est exécuté, aucune de ses configurations n'est utilisée, chaque étape tourne dans un environnement isolé.
 - **Langages** : PHP en priorité (Symfony, Laravel), Python, et les dépendances npm, pnpm, yarn, Composer et pip.
 
+![Page d'accueil d'ASGOR : champ pour l'URL du dépôt, options d'analyse et liste des analyses récentes](docs/apercu-accueil.png)
+
 ---
 
 ## Avertissement
@@ -274,6 +276,7 @@ Pour changer le code : modifier, lancer les tests, puis relancer le playbook. Il
 ├── README.md                ce fichier
 ├── BAREME.md                barème de notation
 ├── GUIDE-EXPLOITATION.md    guide de l'administrateur
+├── docs/                    image d'aperçu de l'interface
 ├── moteur/                  moteur d'analyse et worker (Python, bibliothèque standard)
 │   ├── asgor_moteur/
 │   ├── conf/                configuration ASGOR de chaque outil
@@ -304,7 +307,7 @@ Aujourd'hui :
 
 ## Licence
 
-[MIT](LICENSE). Les polices IBM Plex fournies dans `web/asgor_web/static/polices/` sont sous licence SIL Open Font License 1.1 (`LICENCE-OFL.txt`).
+[MIT](LICENSE) © 2026 BM. Les polices IBM Plex fournies dans `web/asgor_web/static/polices/` sont sous licence SIL Open Font License 1.1 (`LICENCE-OFL.txt`).
 
 ### Règles Semgrep utilisées par Opengrep
 
