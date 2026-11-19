@@ -49,6 +49,29 @@ code_http() {  # code_http <hôte> : code de la page d'accueil avec cet en-tête
   curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" http://127.0.0.1:8000/
 }
 
+limite_api() {  # « <restantes> <secondes avant le retour> » ; cette requête ne compte pas
+  curl -s --max-time 20 -H "User-Agent: asgor-ci" https://api.github.com/rate_limit \
+    | python3 -I -c '
+import json, sys, time
+c = json.load(sys.stdin)["resources"]["core"]
+print(c["remaining"], max(0, int(c["reset"] - time.time())))' 2>/dev/null || echo "inconnue"
+}
+
+attendre_limite_api() {  # attendre_limite_api <attente maximale en secondes>
+  local etat restantes delai
+  etat=$(limite_api)
+  echo "Limite de l'API GitHub : $etat (requêtes restantes, secondes avant le retour)"
+  read -r restantes delai <<< "$etat"
+  [ "$restantes" = inconnue ] && return 0
+  (( restantes > 0 )) && return 0
+  if (( delai > $1 )); then
+    echo "Limite de l'API GitHub atteinte pour cette adresse, retour dans $(( delai / 60 )) min : relancer plus tard." >&2
+    return 1
+  fi
+  echo "Limite de l'API GitHub atteinte : attente de $delai s."
+  sleep $(( delai + 5 ))
+}
+
 verifier() {
   titre "Tests du moteur (dans l'image)"
   # ASGOR_LANCEUR vide : les tests utilisent le lanceur simulé, pas le filtre.
@@ -96,10 +119,17 @@ verifier() {
   echo "OK"
 
   titre "Analyse du dépôt piège"
+  # Le moteur demande la description du dépôt à l'API de GitHub, sans jeton : 60 requêtes
+  # par heure et par adresse IP. Les machines de GitHub Actions partagent leurs adresses :
+  # la limite peut être déjà atteinte (vu le 19/11/2026). On attend son retour s'il est proche.
+  attendre_limite_api 1200
   docker compose exec -T worker asgor-scan "$PIEGE" | tee "$TEMP/piege.log"
   local rapport
   rapport=$(sed -n 's/^Rapport : //p' "$TEMP/piege.log")
-  [ -n "$rapport" ]
+  if [ -z "$rapport" ]; then
+    echo "Analyse du dépôt piège impossible. Limite de l'API GitHub pour cette adresse : $(limite_api)" >&2
+    return 1
+  fi
   docker compose exec -T worker cat "$rapport" > "$TEMP/piege.json"
   python3 docker/verifier-depot-piege.py "$TEMP/piege.json"
 
