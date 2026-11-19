@@ -106,8 +106,21 @@ verifier() {
   titre "Rapport du dépôt piège (JSON compressé, pour comparaison avec une autre installation)"
   # Pour le relire : copier les lignes entre les deux repères, puis base64 -d | gunzip.
   # Secrets masqués (4 premiers caractères), et ceux d'un dépôt de test public.
+  # Le journal est public : le texte des règles Semgrep (explication, références) est
+  # remplacé par sa somme SHA256, car leur licence interdit de les distribuer. La
+  # comparaison reste possible en calculant la même somme sur l'autre rapport.
+  python3 -I -c '
+import hashlib, json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+for p in r["problemes"]:
+    if "Opengrep" in p.get("outils", []):
+        for cle in ("explication", "references"):
+            texte = json.dumps(p.get(cle), ensure_ascii=False, sort_keys=True)
+            p[cle] = "sha256:" + hashlib.sha256(texte.encode()).hexdigest()
+json.dump(r, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+' "$TEMP/piege.json" "$TEMP/piege-public.json"
   echo "--- début du rapport ---"
-  gzip -9c "$TEMP/piege.json" | base64 | fold -w 76
+  gzip -9c "$TEMP/piege-public.json" | base64 | fold -w 76
   echo "--- fin du rapport ---"
 
   if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::endgroup::"; fi
