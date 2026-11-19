@@ -254,6 +254,9 @@ class WorkerAvecLeVraiMoteur(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         racine = tmp.name
+        cle = os.path.join(racine, "empreintes.key")
+        with open(cle, "wb") as f:
+            f.write(b"k" * 32)
         analyses = os.path.join(racine, "jobs")
         dossier_file = os.path.join(racine, "file")
         os.makedirs(analyses)
@@ -263,6 +266,7 @@ class WorkerAvecLeVraiMoteur(unittest.TestCase):
                 mock.patch.object(module_moteur, "RAPPORTS", os.path.join(racine, "reports")),
                 mock.patch.object(module_moteur, "JOURNAUX", os.path.join(racine, "logs")),
                 mock.patch.object(module_moteur, "VERROU", os.path.join(racine, "verrou")),
+                mock.patch.object(module_moteur, "CLE_EMPREINTES", cle),
                 mock.patch.object(module_moteur, "Lanceur", _faux_lanceur(analyses)),
                 mock.patch.object(module_moteur.os, "geteuid", lambda: 0),
                 mock.patch.object(module_moteur.os.path, "ismount", lambda chemin: True)):

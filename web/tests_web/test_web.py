@@ -444,6 +444,49 @@ class Web(unittest.TestCase):
         css = self.client.get("/static/style.css").text
         self.assertIn(".barre-domaine-remplie.largeur-0 { width: 6px; background: #b91c1c; }", css)
 
+    def _note_v3(self, contexte):
+        from asgor_moteur.notation import noter
+        return noter([], contexte)
+
+    def test_bareme_3_secrets_non_evalue(self):
+        from asgor_moteur.notation import Contexte
+        note = self._note_v3(Contexte(outils_en_echec={"secrets": ["Gitleaks"]},
+                                      outils_reussis={"dependances": ["Trivy"], "code": ["Psalm"]},
+                                      raisons_echec={"Gitleaks": "délai dépassé"}))
+        identifiant = self._terminee(1, rapport(nb_problemes=0, note=note, version_format=3))
+        html = self.client.get(f"/analyses/{identifiant}").text
+        self.assertIn("note-c", html)
+        self.assertIn("Non évalué", html)
+        self.assertIn("<strong>Note C</strong> : domaine Secrets non évalué : Gitleaks (délai dépassé) n&#39;a pas donné de résultat", html)
+        self.assertIn("Relancez l&#39;analyse", html)
+        self.assertEqual(html.count("Gitleaks (délai dépassé)"), 1)   # raison affichée une fois
+        self.assertIn("Note calculée sur Dépendances et Code.", html)
+        self.assertNotIn("Aucun secret trouvé", html)   # Gitleaks n'a rien dit
+
+    def test_bareme_3_code_hors_perimetre(self):
+        from asgor_moteur.notation import Contexte
+        raison = "aucun fichier PHP ou Python ; TypeScript : 120 fichiers, langage non pris en charge par ASGOR"
+        note = self._note_v3(Contexte(outils_reussis={"secrets": ["Gitleaks"], "dependances": ["Trivy"]},
+                                      hors_perimetre={"code": raison}))
+        identifiant = self._terminee(1, rapport(nb_problemes=0, note=note, version_format=3))
+        html = self.client.get(f"/analyses/{identifiant}").text
+        self.assertIn("note-a", html)
+        self.assertIn("Hors périmètre", html)
+        self.assertIn("Note calculée sur Secrets et Dépendances. Code : hors périmètre "
+                      f"({raison}).", html)
+        self.assertIn("Aucun secret trouvé", html)
+
+    def test_bareme_3_fichiers_non_analyses(self):
+        from asgor_moteur.notation import Contexte
+        note = self._note_v3(Contexte(outils_reussis={"secrets": ["Gitleaks"], "dependances": ["Trivy"],
+                                                      "code": ["Bandit"]},
+                                      fichiers_non_analyses={"code": ["app/casse.py (Bandit : syntax error)"]}))
+        identifiant = self._terminee(1, rapport(nb_problemes=0, note=note, version_format=3))
+        html = self.client.get(f"/analyses/{identifiant}").text
+        self.assertIn("Partiel", html)
+        self.assertIn("1 fichier non analysé", html)
+        self.assertIn("app/casse.py (Bandit : syntax error)", html)
+
     def test_plus_de_200_problemes(self):
         identifiant = self._terminee(1, rapport(nb_problemes=250))
         html = self.client.get(f"/analyses/{identifiant}").text

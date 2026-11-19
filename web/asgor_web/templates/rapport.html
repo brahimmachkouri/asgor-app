@@ -14,7 +14,7 @@
       <span>Analysé le <strong>{{ analyse.fin | date }}</strong></span>
       <span>Durée <strong>{{ analyse.duree_s | duree }}</strong></span>
       {% if rapport.analyse.historique_complet %}
-      <span>Historique <strong>{{ depot.nb_commits | nombre }} {{ pluriel(depot.nb_commits, "commit") }}</strong></span>
+      <span>Historique{% if depot.branche %} de {{ depot.branche }}{% endif %} <strong>{{ depot.nb_commits | nombre }} {{ pluriel(depot.nb_commits, "commit") }}</strong></span>
       {% else %}
       <span>Historique Git <strong>non analysé</strong></span>
       {% endif %}
@@ -33,26 +33,45 @@
 <section class="carte resume" aria-label="Résumé">
   <div class="note-globale">
     <span class="surtitre-majuscules">Note globale</span>
-    <div class="grande-note {{ note.globale | classe_note }}">{{ note.globale }}</div>
+    <div class="grande-note {{ note.globale | classe_note }}">{{ note.globale or "—" }}</div>
+    {% if note.portee %}<p class="petit">{{ note.portee | capitalize_premiere }}</p>{% endif %}
   </div>
   <div class="domaines">
     {% for cle in ("secrets", "dependances", "code") %}
     {% set d = note.domaines[cle] %}
+    {% set etat = d.etat or ("partiel" if d.evaluation == "incomplète" else "complet") %}
     <div class="domaine">
       <span class="domaine-nom">{{ cle | domaine }}</span>
-      <div class="barre-domaine"><div class="barre-domaine-remplie {{ d.score | classe_largeur }} {{ d.lettre | classe_note }}"></div></div>
-      <span class="domaine-score"><span class="mono">{{ d.score }} <span class="lettre">{{ d.lettre }}</span></span> · {{ d.problemes | nombre }} {{ pluriel(d.problemes, "problème") }}</span>
+      <div class="barre-domaine">{% if d.lettre %}<div class="barre-domaine-remplie {{ d.score | classe_largeur }} {{ d.lettre | classe_note }}"></div>{% endif %}</div>
+      {% if d.lettre %}
+      <span class="domaine-score"><span class="mono">{{ d.score }} <span class="lettre">{{ d.lettre }}</span></span> · {{ d.problemes | nombre }} {{ pluriel(d.problemes, "problème") }}{% if etat == "partiel" %} · <strong>Partiel</strong>{% endif %}</span>
+      {% else %}
+      <span class="domaine-score"><span class="mono">—</span> · <strong>{{ "Hors périmètre" if etat == "hors périmètre" else "Non évalué" }}</strong></span>
+      {% endif %}
     </div>
-    {% if d.evaluation != "complète" %}
-    <p class="petit">{{ cle | domaine }} : évaluation incomplète (échec de {{ d.outils_en_echec | join(", ") }}).</p>
+    {% if etat == "hors périmètre" %}
+    <p class="petit">{{ cle | domaine }} : hors périmètre, pas de lettre et pas d'effet sur la note.</p>
+    {% elif etat == "non évalué" and d.raison not in (note.plafonnements | map(attribute="raison") | list) %}
+    <p class="encart encart-alerte">{{ d.raison | capitalize_premiere }}.</p>
+    {% elif etat == "partiel" %}
+    <p class="petit">{{ (d.raison or ("domaine évalué en partie : échec de " ~ (d.outils_en_echec | join(", ")))) | capitalize_premiere }}.</p>
+    {% endif %}
+    {% if d.fichiers_non_analyses %}
+    <details class="petit">
+      <summary>{{ d.nb_fichiers_non_analyses | nombre }} {{ pluriel(d.nb_fichiers_non_analyses, "fichier") }} non {{ pluriel(d.nb_fichiers_non_analyses, "analysé") }}{% if d.fichiers_non_analyses | length > 50 %} (les 50 premiers){% endif %}</summary>
+      <ul class="liste-compacte">
+        {% for f in d.fichiers_non_analyses[:50] %}<li class="mono">{{ f }}</li>{% endfor %}
+      </ul>
+    </details>
     {% endif %}
     {% endfor %}
     <div class="pile-serree">
       {% for p in note.plafonnements %}
       <p class="encart encart-alerte"><strong>Note {{ p.note_max }}</strong> : {{ p.raison }}.</p>
       {% endfor %}
-      {% if note.domaines.secrets.problemes == 0 and rapport.analyse.historique_complet %}
-      <p class="encart encart-ok">Aucun secret trouvé dans les {{ depot.nb_commits | nombre }} {{ pluriel(depot.nb_commits, "commit") }} de l'historique.</p>
+      {% if note.domaines.secrets.problemes == 0 and rapport.analyse.historique_complet
+            and (note.domaines.secrets.etat or "complet") == "complet" and not note.domaines.secrets.outils_en_echec %}
+      <p class="encart encart-ok">Aucun secret trouvé dans les {{ depot.nb_commits | nombre }} {{ pluriel(depot.nb_commits, "commit") }} de l'historique{% if depot.branche %} de la branche {{ depot.branche }}{% endif %}.</p>
       {% endif %}
       {% for a in rapport.avertissements %}
       <p class="encart encart-info">{{ a }}</p>
@@ -181,7 +200,7 @@
     <h2 class="titre-section-petit">Historique de ce dépôt</h2>
     {% for h in historique %}
     <div class="historique">
-      <span class="pastille petite {{ h.note | classe_note }}">{{ h.note }}</span>
+      <span class="pastille petite {{ h.note | classe_note }}">{{ h.note or "—" }}</span>
       {% if h.id == identifiant %}<span>{{ h.fin | date }} (cette analyse)</span>{% else %}<a href="/analyses/{{ h.id }}">{{ h.fin | date }}</a>{% endif %}
       <span class="mono petit">{{ h.commit_sha | court }}</span>
     </div>
@@ -192,11 +211,12 @@
   <div class="carte pile-serree">
     <h2 class="titre-section-petit">Comment la note est calculée</h2>
     <ul class="liste-explications">
-      <li>Chaque domaine reçoit un score de 0 à 100. La note globale est la plus basse des trois lettres.</li>
+      <li>Chaque domaine reçoit un score de 0 à 100. La note globale est la plus basse des lettres des domaines notés.</li>
+      <li>Un domaine <strong>hors périmètre</strong> (rien à analyser avec les outils d'ASGOR, par exemple un langage non pris en charge) n'a pas de lettre et n'a pas d'effet sur la note. La note indique alors sur quels domaines elle porte.</li>
       <li><strong>F</strong> : secret détecté (fichiers ou historique), ou faille critique.</li>
       <li><strong>D au maximum</strong> : secret « à vérifier » (fichier de test, de documentation ou d'exemple). Un résultat écarté comme faux positif ne compte plus.</li>
-      <li><strong>C au maximum</strong> : injection SQL, XSS ou injection de commande détectée par l'analyse de flux.</li>
-      <li><strong>B au maximum</strong> : faille élevée corrigeable dans une dépendance, application sans fichier de verrouillage, historique Git non analysé, outil en échec, ou problème moyen.</li>
+      <li><strong>C au maximum</strong> : injection SQL, XSS ou injection de commande détectée par l'analyse de flux, ou domaine <strong>non évalué</strong> (aucun de ses outils n'a donné de résultat).</li>
+      <li><strong>B au maximum</strong> : faille élevée corrigeable dans une dépendance, application sans fichier de verrouillage, historique Git non analysé, domaine évalué <strong>en partie</strong> (un outil en échec, des fichiers non analysés), ou problème moyen.</li>
       <li><strong>A</strong> : aucun problème moyen ou plus grave.</li>
     </ul>
   </div>

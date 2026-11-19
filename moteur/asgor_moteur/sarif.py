@@ -129,6 +129,10 @@ def vers_sarif(rapport: dict) -> dict:
             "note_globale": note.get("globale"),
             "raisons": [p.get("raison") for p in note.get("plafonnements", [])],
             "scores": {d: v.get("score") for d, v in note.get("domaines", {}).items()},
+            # Barème 3 : état de chaque domaine (score null s'il n'a pas été noté)
+            "etats": {d: v.get("etat") for d, v in note.get("domaines", {}).items()
+                      if v.get("etat")},
+            "portee": note.get("portee", ""),
             "historique_complet": analyse.get("historique_complet"),
             "avertissements": rapport.get("avertissements", []),
             "outils": rapport.get("outils", {}),

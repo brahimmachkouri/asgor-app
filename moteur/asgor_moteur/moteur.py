@@ -27,7 +27,7 @@ from .notation import Contexte, noter
 from .url import Depot
 
 VERSION_MOTEUR = "0.2"
-VERSION_FORMAT = 2
+VERSION_FORMAT = 3   # 3 : état de chaque domaine, score null si non noté
 
 DONNEES = "/var/lib/asgor"
 ANALYSES = f"{DONNEES}/jobs"
@@ -38,6 +38,9 @@ CONF = "/opt/asgor/moteur/conf"
 REGLES = "/opt/asgor/regles/semgrep-rules/actuel"
 VERROU = "/run/asgor-scan.lock"
 OUTILS = "/opt/asgor/outils.json"      # versions des outils, écrit par le playbook
+# Clé de l'empreinte des secrets (HMAC), créée par le playbook, 0600 root.
+# Dans /etc/asgor/secrets/, invisible depuis les analyses.
+CLE_EMPREINTES = "/etc/asgor/secrets/empreintes.key"
 GROUPE_WEB = "asgor-web"                # le service web lit les rapports (étape 4)
 
 TAILLE_MAX_DEPOT = 500 * 1024 * 1024   # règle 4 de sécurité du moteur (README.md)
@@ -252,7 +255,7 @@ class Analyse:
         self.journaux = os.path.join(JOURNAUX, self.id)
         self.problemes = []
         self.avertissements = []
-        self.contexte = Contexte()
+        self.contexte = Contexte(outils_reussis={})
         self.qualite = None
         self.infos_depot = {}
         self.lanceur = None
@@ -317,7 +320,13 @@ class Analyse:
         self.contexte.outils_en_echec.setdefault(domaine, [])
         if outil not in self.contexte.outils_en_echec[domaine]:
             self.contexte.outils_en_echec[domaine].append(outil)
+        self.contexte.raisons_echec.setdefault(outil, raison)   # la première cause
         self.avertissements.append(f"{outil} n'a pas donné de résultat : {raison}")
+
+    def _outil_reussi(self, domaine: str, outil: str) -> None:
+        reussis = self.contexte.outils_reussis.setdefault(domaine, [])
+        if outil not in reussis:
+            reussis.append(outil)
 
     def _lire_resultat(self, etape, domaine, nom_outil, nom_sortie, lecteur, /, **options) -> None:
         """Lit le fichier de résultat d'un outil et ajoute ses problèmes."""
@@ -332,6 +341,9 @@ class Analyse:
             self.problemes.extend(lecteur(donnees, **options))
         except (fichiers.LectureRefusee, analyseurs.FormatInattendu) as e:
             self._echec_outil(domaine, nom_outil, str(e))
+            return None
+        self._outil_reussi(domaine, nom_outil)
+        return donnees
 
     def _versions_composer(self, verrou: str) -> dict:
         """{nom en minuscules: version} lu dans composer.lock (lecture JSON seule).
@@ -416,7 +428,9 @@ class Analyse:
             raise AnalyseExistante(m.group(1))
 
     def _cloner(self) -> None:
-        # Case « Analyser tout l'historique Git » décochée : dernier commit seulement.
+        # Case « Analyser l'historique de la branche par défaut » décochée : dernier commit
+        # seulement. Cochée : historique de la branche par défaut (--single-branch) ; les
+        # commits propres aux autres branches ne sont pas clonés.
         # Gitleaks (mode git) ne voit alors que les fichiers actuels (vérifié :
         # git log -p d'un clone --depth 1 montre les fichiers actuels
         # comme ajoutés, pas les fichiers supprimés plus tôt).
@@ -465,7 +479,30 @@ class Analyse:
         self.contexte.sans_verrouillage = plafonds
         self.avertissements.extend(avertissements)
         self._detail = ", ".join(inv.langages) or "ni PHP ni Python"
+        self._perimetre(inv)
         return inv
+
+    def _perimetre(self, inv) -> None:
+        """Domaines sans rien à analyser, et code non analysé (BAREME.md § 3 b).
+
+        Inventaire tronqué : on ne déclare rien « hors périmètre » (dans le doute,
+        le domaine est évalué)."""
+        autres = ", ".join(f"{langage} : {nombre_fr(n)} fichier{'s' if n > 1 else ''}"
+                           for langage, n in sorted(inv.non_pris_en_charge.items(),
+                                                    key=lambda e: (-e[1], e[0])))
+        if inv.tronque:
+            return
+        if not (inv.php or inv.python):
+            raison = "aucun fichier PHP ou Python"
+            if autres:
+                raison += f" ; {autres}, langage non pris en charge par ASGOR"
+            self.contexte.hors_perimetre[CODE] = raison
+        elif autres:
+            self.avertissements.append(
+                f"Fichiers de code non analysés (langage non pris en charge par ASGOR) : {autres}.")
+        if not inv.fichiers_dependances:
+            self.contexte.hors_perimetre[DEPENDANCES] = (
+                "aucun fichier de dépendances (composer.json, requirements.txt, package.json…)")
 
     def _mettre_a_jour_les_bases(self) -> None:
         self._base_trivy = self._etape("base-trivy", "fetch", [
@@ -557,8 +594,17 @@ class Analyse:
             "Le dépôt contient un fichier .gitleaksignore : ASGOR l'ignore, car il peut "
             "masquer des secrets.")
 
+    def _cle_empreintes(self):
+        """Clé de l'empreinte des secrets, ou None si absente ou trop courte."""
+        try:
+            cle = fichiers.lire_octets(CLE_EMPREINTES, 4096)
+        except fichiers.LectureRefusee:
+            return None
+        return cle if len(cle) >= analyseurs.TAILLE_MIN_CLE_EMPREINTES else None
+
     def _secrets(self) -> None:
         self._neutraliser_gitleaksignore()
+        cle = self._cle_empreintes()
         brut = "gitleaks.json"
         etape = self._etape("gitleaks", "scan", [
             "gitleaks", "git", "src", "--config", f"{CONF}/gitleaks.toml",
@@ -566,12 +612,18 @@ class Analyse:
             "--report-format", "json", "--report-path", f"out/{brut}",
             "--no-banner", "--exit-code", "0", "--log-level", "warn"], duree_max=1200)
         try:
-            self._lire_resultat(etape, SECRETS, "Gitleaks", brut, analyseurs.lire_gitleaks)
+            if cle is None:
+                # Sans clé, l'identifiant d'un secret se retrouverait par essais.
+                self._echec_outil(SECRETS, "Gitleaks", "clé d'empreinte des secrets absente "
+                                  f"ou trop courte ({CLE_EMPREINTES}) : relancer le playbook")
+            else:
+                self._lire_resultat(etape, SECRETS, "Gitleaks", brut, analyseurs.lire_gitleaks,
+                                    cle=cle)
         finally:
             # Le rapport brut contient les secrets en clair : on ne le garde pas.
             fichiers.supprimer(os.path.join(self.out, brut))
         n = sum(1 for p in self.problemes if p.domaine == SECRETS)
-        portee = "tout l'historique" if self.historique_complet else "fichiers actuels"
+        portee = "historique de la branche par défaut" if self.historique_complet else "fichiers actuels"
         self._detail = (f"Gitleaks, {portee} — "
                         + (f"{n} secret{'s' if n > 1 else ''} détecté{'s' if n > 1 else ''}"
                            if n else "aucun secret"))
@@ -726,8 +778,12 @@ class Analyse:
             "bandit", "-r", "src", "--ini", f"{CONF}/bandit.ini", "--ignore-nosec",
             "-f", "json", "-o", "out/bandit.json", "--exit-zero", "-q", "-x", exclus],
             duree_max=900)
-        self._lire_resultat(etape, CODE, "Bandit", "bandit.json", analyseurs.lire_bandit,
-                            racine_analyse=self.dossier)
+        donnees = self._lire_resultat(etape, CODE, "Bandit", "bandit.json",
+                                      analyseurs.lire_bandit, racine_analyse=self.dossier)
+        if donnees is not None:
+            non_lus = analyseurs.erreurs_bandit(donnees, racine_analyse=self.dossier)
+            if non_lus:
+                self.contexte.fichiers_non_analyses.setdefault(CODE, []).extend(non_lus)
         self._detail = "Bandit"
 
     # ------------------------------------------------------------- déroulement
@@ -812,6 +868,8 @@ class Analyse:
                 "langages": inv.langages,
                 "nb_fichiers_php": inv.nb_php,
                 "nb_fichiers_python": inv.nb_python,
+                # Code d'autres langages, non analysé (bilan de couverture)
+                "fichiers_non_pris_en_charge": dict(sorted(inv.non_pris_en_charge.items())),
                 **self.infos_depot,
             },
             "note": note,

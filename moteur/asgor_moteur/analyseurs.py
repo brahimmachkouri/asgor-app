@@ -6,6 +6,8 @@ limite les longueurs. Une forme inattendue lève FormatInattendu ; le moteur
 marque alors l'outil comme « en échec ».
 """
 
+import hashlib
+import hmac
 import re
 
 from . import versions
@@ -53,13 +55,18 @@ def _entier(valeur) -> int:
     return n if 0 <= n < 10**9 else 0
 
 
-def _chemin(valeur, racine_analyse: str = "") -> str:
-    """Chemin relatif à la racine du dépôt (on retire « src/ » et le dossier de l'analyse)."""
+def _chemin(valeur, racine_analyse: str = "", retirer_src: bool = True) -> str:
+    """Chemin relatif à la racine du dépôt (on retire « src/ » et le dossier de l'analyse).
+
+    retirer_src=False pour un outil qui donne déjà un chemin relatif au dépôt
+    (Gitleaks en mode git) : un vrai dossier « src/ » du dépôt doit rester."""
     chemin = _texte(valeur, LONGUEUR_MAX_CHEMIN)
     if racine_analyse and chemin.startswith(racine_analyse.rstrip("/") + "/"):
         chemin = chemin[len(racine_analyse.rstrip("/")) + 1:]
     while chemin.startswith("./"):
         chemin = chemin[2:]
+    if not retirer_src:
+        return chemin
     if chemin == "src":
         return ""
     if chemin.startswith("src/"):
@@ -150,8 +157,26 @@ def chemin_a_verifier(fichier: str) -> bool:
     return any(nom.endswith(suffixe) or (suffixe + ".") in nom for suffixe in _SUFFIXES_A_VERIFIER)
 
 
-def lire_gitleaks(donnees) -> list:
+TAILLE_MIN_CLE_EMPREINTES = 32
+
+
+def empreinte_valeurs(cle: bytes, valeurs) -> str:
+    """HMAC-SHA256 des valeurs distinctes d'un secret, avec la clé de l'instance.
+
+    Un simple SHA256 se retrouverait par essais pour un secret court ou banal
+    (l'identifiant est public dans le rapport) : la clé l'empêche.
+    """
+    texte = "\x00".join(sorted(set(valeurs)))
+    return hmac.new(cle, texte.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
+
+
+def lire_gitleaks(donnees, *, cle: bytes) -> list:
     """Rapport JSON de Gitleaks 8 : liste de résultats.
+
+    cle : clé de l'instance pour l'empreinte des valeurs (CLE_EMPREINTES dans
+    moteur.py). L'identifiant d'un problème dépend de la règle, du fichier et des
+    valeurs trouvées : une nouvelle valeur dans un fichier dont un faux positif a
+    été écarté redonne un problème à examiner.
 
     Le secret en clair est masqué ici et n'est conservé nulle part ailleurs.
     Regroupement (BAREME.md § 6 a) : un seul problème par fichier et par type de
@@ -161,22 +186,27 @@ def lire_gitleaks(donnees) -> list:
     """
     if donnees is None:
         return []
+    if not isinstance(cle, bytes) or len(cle) < TAILLE_MIN_CLE_EMPREINTES:
+        raise ValueError("Gitleaks : clé d'empreinte absente ou trop courte")
     if not isinstance(donnees, list):
         raise FormatInattendu("Gitleaks : une liste était attendue")
 
     groupes = {}  # (règle, fichier) -> [(ligne, commit, secret masqué), ...]
+    valeurs = {}  # (règle, fichier) -> {secret en clair} (en mémoire seulement)
     for r in donnees:
         r = _dict(r)
         regle = _texte(r.get("RuleID"), 100)
         secret = r.get("Secret")
         if not isinstance(secret, str):
             secret = ""
-        fichier = _chemin(r.get("File"))
+        # Gitleaks (mode git) donne le chemin relatif au dépôt, sans « src/ » du clone.
+        fichier = _chemin(r.get("File"), retirer_src=False)
         ligne = _entier(r.get("StartLine"))
         commit = _texte(r.get("Commit"), 64)
         if not re.fullmatch(r"[0-9a-f]{7,64}", commit):
             commit = ""
         groupes.setdefault((regle, fichier), []).append((ligne, commit, masquer_secret(secret)))
+        valeurs.setdefault((regle, fichier), set()).add(secret)
 
     problemes = []
     for (regle, fichier), occurrences in groupes.items():
@@ -202,6 +232,7 @@ def lire_gitleaks(donnees) -> list:
             secret_masque=masque,
             occurrences=len(occurrences),
             a_verifier=a_verifier,
+            empreinte_valeurs=empreinte_valeurs(cle, valeurs[(regle, fichier)]),
         ))
     return problemes
 
@@ -563,6 +594,16 @@ def lire_semgrep(donnees, outil: str = "Semgrep", racine_analyse: str = "") -> l
 
 # ----------------------------------------------------------------------- Bandit
 
+# Règles dont le texte (issue_text) contient la valeur trouvée, par exemple
+# « Possible hardcoded password: 'xxx' » (vérifié avec Bandit 1.9.4 le 18/11/2026).
+# Ce texte n'est jamais repris : il irait en clair dans la page, le JSON et le SARIF.
+_TEXTES_BANDIT_MAITRISES = {
+    "B105": "Mot de passe probablement écrit en dur dans une chaîne du code.",
+    "B106": "Mot de passe probablement écrit en dur dans un argument d'appel de fonction.",
+    "B107": "Mot de passe probablement écrit en dur comme valeur par défaut d'un argument.",
+}
+
+
 def lire_bandit(donnees, racine_analyse: str = "") -> list:
     """`bandit -f json` : {"results": [{"filename", "line_number", "test_id", ...}]}."""
     donnees = _dict(donnees)
@@ -586,11 +627,28 @@ def lire_bandit(donnees, racine_analyse: str = "") -> list:
             ligne=_entier(r.get("line_number")),
             outils=["Bandit"],
             regle=f"{test_id} {nom}".strip(),
-            explication=_texte(r.get("issue_text")),
+            explication=_TEXTES_BANDIT_MAITRISES.get(test_id.upper()) or _texte(r.get("issue_text")),
             categorie=categorie,
             references=[_texte(r.get("more_info"), 300)] if r.get("more_info") else [],
         ))
     return problemes
+
+
+NB_MAX_FICHIERS_NON_LUS = 500
+
+
+def erreurs_bandit(donnees, racine_analyse: str = "") -> list:
+    """Fichiers que Bandit n'a pas pu analyser (clé « errors » de son JSON).
+
+    Bandit les signale à part et continue : sans cette lecture, un fichier manqué
+    disparaissait du bilan. Renvoie ["chemin (Bandit : raison)", ...]."""
+    resultat = []
+    for e in _liste(_dict(donnees).get("errors"))[:NB_MAX_FICHIERS_NON_LUS]:
+        e = _dict(e)
+        chemin = _chemin(e.get("filename"), racine_analyse) or "fichier inconnu"
+        raison = _texte(e.get("reason"), 120) or "erreur d'analyse"
+        resultat.append(f"{chemin} (Bandit : {raison})")
+    return resultat
 
 
 # ---------------------------------------------------------------------- PHPStan

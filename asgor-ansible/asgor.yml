@@ -67,6 +67,9 @@
     # Outils Python : un venv par outil (évite les conflits de dépendances).
     # Épingler chaque outil après vérification de la version (ex. 'bandit==X.Y.Z').
     asgor_python_tools:
+    # Chaque outil s'installe depuis files/outils-python/<nom>.txt : versions exactes
+    # de l'outil ET de toutes ses dépendances, avec les sommes SHA256 (--require-hashes),
+    # comme le service web. spec : rappel de la version de l'outil (affichage).
       - name: bandit
         spec: 'bandit==1.9.4'      # 25/02/2026
         bins: [bandit]
@@ -570,15 +573,46 @@
       loop_control:
         label: '{{ item.name }}'
       when: item.enabled | bool
+      register: asgor_python_venvs
 
-    - name: Installer les outils Python
-      ansible.builtin.pip:
-        name: '{{ item.spec }}'
-        virtualenv: '{{ asgor_root }}/venvs/{{ item.name }}'
+    - name: Installer la liste des dépendances épinglées de chaque outil Python
+      ansible.builtin.copy:
+        src: 'files/outils-python/{{ item.name }}.txt'
+        dest: '{{ asgor_root }}/venvs/{{ item.name }}-requirements.txt'
+        owner: root
+        group: root
+        mode: '0644'
       loop: '{{ asgor_python_tools }}'
       loop_control:
-        label: '{{ item.spec }}'
+        label: '{{ item.name }}'
       when: item.enabled | bool
+      register: asgor_python_requirements
+
+    # Versions exactes et sommes SHA256 de chaque fichier (règle des 14 jours), sans
+    # résolution de dépendances par pip : deux installations donnent le même résultat.
+    # Relancé quand la liste change ou que le venv vient d'être créé.
+    - name: Installer les outils Python (contrôle des sommes)
+      ansible.builtin.command:
+        cmd: >-
+          {{ asgor_root }}/venvs/{{ item.0.item.name }}/bin/python -m pip install
+          --disable-pip-version-check --no-input --require-hashes --no-deps --only-binary=:all:
+          -r {{ asgor_root }}/venvs/{{ item.0.item.name }}-requirements.txt
+      loop: '{{ asgor_python_requirements.results | zip(asgor_python_venvs.results) | list }}'
+      loop_control:
+        label: '{{ item.0.item.name }}'
+      when:
+        - item.0.item.enabled | bool
+        - item.0.changed or item.1.changed
+
+    - name: Vérifier la cohérence des dépendances des outils Python
+      ansible.builtin.command:
+        cmd: '{{ asgor_root }}/venvs/{{ item.name }}/bin/python -m pip check'
+      loop: '{{ asgor_python_tools }}'
+      loop_control:
+        label: '{{ item.name }}'
+      when: item.enabled | bool
+      changed_when: false
+      check_mode: false
 
     # Semgrep : abandonné (mêmes résultats qu'Opengrep, 3 à 10 fois plus lent) et
     # désinstallé des installations existantes. Les règles semgrep-rules restent :
@@ -660,6 +694,26 @@
         owner: root
         group: root
         mode: '0700'
+
+    # Clé HMAC de l'identifiant des secrets (moteur.py, CLE_EMPREINTES). Tirée sur
+    # la VM, une seule fois : elle ne passe jamais par le Mac ni par la sortie
+    # d'Ansible. La changer redonne un nouvel identifiant à tous les secrets
+    # (les faux positifs de secrets déjà écartés seraient à écarter de nouveau).
+    - name: Créer la clé d'empreinte des secrets (une seule fois)
+      ansible.builtin.shell:
+        cmd: >-
+          umask 077 &&
+          head -c 32 /dev/urandom > {{ asgor_etc }}/secrets/empreintes.key.tmp &&
+          mv {{ asgor_etc }}/secrets/empreintes.key.tmp {{ asgor_etc }}/secrets/empreintes.key
+        creates: '{{ asgor_etc }}/secrets/empreintes.key'
+      no_log: true
+
+    - name: Droits de la clé d'empreinte des secrets
+      ansible.builtin.file:
+        path: '{{ asgor_etc }}/secrets/empreintes.key'
+        owner: root
+        group: root
+        mode: '0600'
 
     - name: Écrire les limites de l'isolation
       ansible.builtin.copy:

@@ -1,6 +1,6 @@
 # ASGOR — barème de notation
 
-Ce document décrit comment ASGOR calcule la note d'un dépôt (barème version 2, appliqué par `moteur/asgor_moteur/notation.py`). Le numéro de version du barème est écrit dans chaque rapport.
+Ce document décrit comment ASGOR calcule la note d'un dépôt (barème version 3, appliqué par `moteur/asgor_moteur/notation.py`). Le numéro de version du barème est écrit dans chaque rapport.
 
 ---
 
@@ -9,8 +9,8 @@ Ce document décrit comment ASGOR calcule la note d'un dépôt (barème version 
 La note doit pousser le développeur à corriger les failles et les défauts le plus vite possible. Dans le doute, ASGOR choisit la règle la plus sévère.
 
 1. Chaque problème trouvé reçoit une **gravité** (§ 2).
-2. Chaque domaine (**Secrets**, **Dépendances**, **Code**) reçoit un **score de 0 à 100**, puis une lettre (§ 3).
-3. La **note globale** est la plus basse des trois lettres. Un domaine très mauvais ne peut pas être compensé par les deux autres.
+2. Chaque domaine (**Secrets**, **Dépendances**, **Code**) reçoit un **score de 0 à 100**, puis une lettre (§ 3), sauf s'il n'a pas pu être évalué ou s'il est hors périmètre (§ 3 b).
+3. La **note globale** est la plus basse des lettres des domaines notés. Un domaine très mauvais ne peut pas être compensé par les autres. Quand un domaine n'est pas noté, la note dit sur quels domaines elle porte.
 4. Des **règles de plafonnement** peuvent ensuite abaisser la note globale (§ 4). Le rapport affiche toujours la raison du plafonnement.
 
 **Qualité du code.** Le rapport contient aussi une rubrique « Qualité du code », produite par PHPStan (niveau 5, configuration générée par ASGOR) : bugs probables, types incohérents, code mort. Elle est **sans effet sur la note**. Si PHPStan échoue, la rubrique est absente, avec un avertissement, sans plafonnement.
@@ -63,21 +63,40 @@ Un problème signalé par deux outils ne compte qu'une fois. Un résultat écart
 
 `outils/simuler_bareme.py` recalcule les notes de rapports JSON existants avec un autre barème : il sert à mesurer l'effet d'un changement avant de le faire dans le moteur.
 
+## 3 b. État d'un domaine
+
+Un score de 100 doit vouloir dire « analysé, rien trouvé », jamais « pas analysé ». Chaque domaine a donc un état, affiché à côté de son score :
+
+| État | Quand | Score et lettre du domaine | Note globale |
+|---|---|---|---|
+| **Complet** | Tous les outils prévus ont donné un résultat. | calculés (§ 3) | pas d'effet |
+| **Partiel** | Au moins un outil a donné un résultat, mais pas tous ; ou un outil n'a pas pu lire certains fichiers (la liste est dans le rapport) ; ou, pour Secrets, l'historique Git n'a pas été analysé. | calculés sur ce qui a été trouvé, avec la mention « Partiel » et la raison | **B au maximum** |
+| **Non évalué** | Aucun outil du domaine n'a donné de résultat (exemple : Gitleaks en échec). | **aucun** (« — ») | **C au maximum** |
+| **Hors périmètre** | Rien à analyser avec les outils d'ASGOR : aucun fichier PHP ou Python pour Code ; aucun fichier de dépendances pour Dépendances. | **aucun** (« — »), avec la raison | **pas d'effet** |
+
+Précisions :
+
+- **Non évalué** : le rapport donne la raison complète : l'outil, la cause exacte (délai dépassé, erreur de l'outil, sortie illisible…), ce qu'ASGOR ne peut pas dire sans cette analyse, et quoi faire (relancer l'analyse ; si l'échec se répète, prévenir l'administrateur). C et non F : F accuserait le dépôt d'un problème que personne n'a vu ; C reste nettement sous le B d'une analyse partielle. Un plafond plus sévère (secret détecté, faille critique) l'emporte toujours.
+- **Hors périmètre** : ASGOR ne prétend pas analyser ce domaine, il ne le juge donc pas. La note globale porte sur les autres domaines et le dit, par exemple : « A — note calculée sur Secrets et Dépendances. Code : hors périmètre (aucun fichier PHP ou Python ; TypeScript : 120 fichiers, langage non pris en charge par ASGOR). » Secrets n'est jamais hors périmètre : Gitleaks lit tous les fichiers, quel que soit le langage. Un domaine qui contient un problème est toujours évalué. Si l'inventaire du dépôt est partiel (trop de fichiers), aucun domaine n'est déclaré hors périmètre.
+- **Dépôt mélangé** (PHP ou Python, avec du code d'un autre langage) : le domaine Code est noté sur le PHP et le Python, sans plafond. Le rapport indique les fichiers non analysés, par exemple « Fichiers de code non analysés (langage non pris en charge par ASGOR) : TypeScript : 120 fichiers. » Les bibliothèques minifiées (`*.min.js`) ne sont pas comptées.
+- Si aucun domaine n'a pu être noté, il n'y a pas de note globale ; le rapport donne les raisons.
+
 ## 4. Règles de plafonnement
 
 Elles s'appliquent après le calcul des scores. Si plusieurs règles s'appliquent, la plus sévère l'emporte.
 
 | Condition | Note globale |
 |---|---|
-| Un secret détecté, **dans les fichiers actuels ou dans n'importe quel ancien commit** | **F** |
+| Un secret détecté, **dans les fichiers actuels ou dans n'importe quel ancien commit de la branche par défaut** | **F** |
 | Une faille critique (dépendance ou code) | **F** |
 | Seulement des secrets « à vérifier » (fichiers de test, de documentation, d'exemple, bibliothèques minifiées : § 6) | **D au maximum** |
 | Injection SQL, XSS ou injection de commande trouvée par l'analyse de flux | **C au maximum** |
 | Au moins un problème de gravité moyenne ou plus grave | **B au maximum** |
 | Dépendance avec une faille élevée et une version corrigée disponible | **B au maximum** |
 | Application sans fichier de verrouillage (§ 5) | **B au maximum**, avec la mention « analyse des dépendances incomplète » |
-| Case « Analyser tout l'historique Git » décochée : seuls les fichiers actuels sont cherchés | **B au maximum**, avec la mention « historique Git non analysé » |
-| Un outil a échoué ou dépassé son délai | **B au maximum**, et le domaine concerné est marqué « non évalué entièrement » |
+| Case « Analyser l'historique de la branche par défaut » décochée : seuls les fichiers actuels sont cherchés | **B au maximum**, avec la mention « historique Git non analysé » |
+| Un domaine évalué en partie : un outil sur plusieurs a échoué ou dépassé son délai, ou des fichiers n'ont pas pu être analysés (§ 3 b) | **B au maximum**, avec la raison |
+| Un domaine non évalué : aucun de ses outils n'a donné de résultat (§ 3 b) | **C au maximum**, avec la raison complète |
 
 La note A n'est donc possible que sans aucun problème de gravité moyenne ou plus grave.
 
@@ -128,7 +147,7 @@ Les outils de recherche de secrets signalent aussi des valeurs factices : vecteu
 
 « À vérifier » ne change que la gravité du secret : ces fichiers restent analysés par tous les outils (secrets et code). Le plafonnement reste sévère, car un vrai secret peut aussi se trouver dans un dossier de test.
 
-**c. Marquage manuel.** Depuis la page du rapport, un membre de l'équipe peut écarter un résultat comme faux positif, avec un motif obligatoire. Le résultat écarté ne compte plus dans la note, pour cette analyse et les suivantes du même dépôt. Il reste affiché dans une rubrique « Résultats écartés », avec la date, le motif et l'adresse IP. Un marquage peut être annulé.
+**c. Marquage manuel.** Depuis la page du rapport, un membre de l'équipe peut écarter un résultat comme faux positif, avec un motif obligatoire. Le résultat écarté ne compte plus dans la note, pour cette analyse et les suivantes du même dépôt. Pour un secret, la décision porte sur les valeurs trouvées : si une nouvelle valeur apparaît dans le même fichier, avec la même règle, le résultat reçoit un nouvel identifiant et revient à examiner. L'identifiant d'un secret est calculé avec une clé propre à l'instance ASGOR (HMAC-SHA256) : on ne peut pas retrouver le secret à partir de l'identifiant. Une analyse avec l'historique Git et une analyse sans l'historique peuvent trouver des valeurs différentes dans le même fichier : l'identifiant est alors différent et le secret est à écarter de nouveau. Il reste affiché dans une rubrique « Résultats écartés », avec la date, le motif et l'adresse IP. Un marquage peut être annulé.
 
 On peut écarter plusieurs résultats à la fois : une case à cocher devant chaque résultat et un bouton « Écarter la sélection » (motif commun obligatoire), plus un bouton « Écarter tout ce groupe » en tête de chaque regroupement (même fichier ou même règle). C'est un formulaire HTML ordinaire, sans JavaScript ; il ne transmet que les identifiants des résultats (500 au plus par envoi), vérifiés un par un par le worker. Le service web dépose le marquage dans la file ; seul le worker écrit dans la base et recalcule la note.
 

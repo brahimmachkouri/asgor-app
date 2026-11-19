@@ -46,7 +46,7 @@ Pour un dépôt `https://github.com/<propriétaire>/<dépôt>`, ASGOR cherche :
 
 | Domaine | Ce qui est cherché |
 |---|---|
-| **Secrets** | clés, jetons et mots de passe dans les fichiers et dans tout l'historique Git |
+| **Secrets** | clés, jetons et mots de passe dans les fichiers et dans l'historique Git de la branche par défaut (les branches jamais fusionnées ne sont pas analysées) |
 | **Dépendances** | bibliothèques avec des failles connues (CVE, GHSA), d'après les fichiers de verrouillage |
 | **Code** | injections SQL, XSS, injections de commande, fonctions dangereuses (PHP et Python) |
 
@@ -91,7 +91,7 @@ Navigateur ──HTTPS──> reverse proxy (Caddy) ──> asgor-web (compte as
 
 ## Outils utilisés
 
-Versions épinglées (version exacte et somme SHA256, signatures vérifiées quand elles existent) :
+Versions épinglées (version exacte et somme SHA256, signatures vérifiées quand elles existent). Pour Bandit et pip-audit, toutes leurs dépendances Python sont aussi épinglées avec leurs sommes (`asgor-ansible/files/outils-python/`), installées sans résolution par pip : deux installations donnent le même résultat.
 
 | Domaine | Outil | Rôle |
 |---|---|---|
@@ -156,7 +156,7 @@ Une option acceptée par un outil n'est pas forcément une option qui marche. Le
 ## Notation
 
 - Chaque domaine reçoit un score de 0 à 100 et une lettre. Le barème retire 15 points à chaque doublement du nombre de problèmes ; une dépendance vulnérable compte une seule fois.
-- La note globale est la plus basse des trois lettres, puis des plafonnements s'appliquent :
+- La note globale est la plus basse des lettres des domaines notés, puis des plafonnements s'appliquent :
 
 | Constat | Note maximale |
 |---|---|
@@ -164,9 +164,10 @@ Une option acceptée par un outil n'est pas forcément une option qui marche. Le
 | faille critique | F |
 | secret « à vérifier » (fichier de test, de documentation, d'exemple) | D |
 | injection détectée par l'analyse de flux | C |
-| problème moyen, faille élevée corrigeable, fichier de verrouillage absent, historique non analysé ou outil en échec | B |
+| domaine non évalué (aucun de ses outils n'a donné de résultat) | C |
+| problème moyen, faille élevée corrigeable, fichier de verrouillage absent, historique non analysé, domaine évalué en partie (un outil en échec, des fichiers non analysés) | B |
 
-Un rapport distingue « aucun problème trouvé » d'une analyse incomplète : si un outil échoue, son domaine est marqué « non évalué » et la note ne dépasse pas B.
+Un rapport distingue « aucun problème trouvé » d'une analyse incomplète. Chaque domaine a un état : complet, partiel, non évalué ou hors périmètre. Un domaine non évalué n'a pas de lettre, et le rapport dit pourquoi. Un domaine hors périmètre (langage non pris en charge, aucun fichier de dépendances) n'a pas de lettre et pas d'effet sur la note ; la note dit alors sur quels domaines elle porte. Les fichiers de code d'autres langages sont comptés et signalés.
 
 Règles complètes : [`BAREME.md`](BAREME.md).
 
@@ -182,7 +183,7 @@ Le dépôt analysé est traité comme hostile. Ces règles sont obligatoires ; l
 2. **Ne jamais exécuter de code du dépôt.** `composer install` uniquement avec `--no-scripts --no-plugins --no-interaction` ; pip-audit sans installation ni résolution de paquets.
 3. **Valider l'URL** avant tout : uniquement `https://github.com/<propriétaire>/<dépôt>`, caractères limités, pas d'identifiants, pas d'autre hôte, pas de redirection suivie vers un autre hôte.
 4. **Limiter** : 500 Mo par dépôt, 30 minutes par analyse, une seule analyse à la fois.
-5. **Secrets trouvés** : ne jamais les stocker ni les afficher en clair. Seuls sont gardés le type, le fichier, la ligne, le commit et une version masquée (4 premiers caractères puis `****`). Ils ne sont jamais testés : les tester reviendrait à les utiliser.
+5. **Secrets trouvés** : ne jamais les stocker ni les afficher en clair. Seuls sont gardés le type, le fichier, la ligne, le commit et une version masquée (4 premiers caractères puis `****`). L'identifiant d'un secret est un HMAC des valeurs trouvées, avec une clé propre à l'instance, rangée hors de portée des analyses (`/etc/asgor/secrets/`). Le texte des alertes Bandit sur les mots de passe (B105, B106, B107) contient la valeur : il est remplacé par un texte fixe. Ils ne sont jamais testés : les tester reviendrait à les utiliser.
 
 Un dépôt piège public, [depot-test-analyse](https://github.com/brahimmachkouri/depot-test-analyse), sert à vérifier que ces règles tiennent. Il a permis de trouver et corriger trois contournements : un `.gitleaksignore` lu malgré l'option contraire, la section `config.audit` du `composer.json` qui masquait des failles, et des secrets écrits dans des tableaux PHP.
 
@@ -287,7 +288,7 @@ Pour changer le code : modifier, lancer les tests, puis relancer le playbook. Il
 │   ├── bin/asgor-web
 │   ├── requirements.txt     dépendances épinglées avec sommes SHA256
 │   └── tests_web/
-├── outils/                  simuler_bareme.py (réglage du barème)
+├── outils/                  simuler_bareme.py (réglage du barème), epingler_python.py (sommes des outils Python)
 └── asgor-ansible/           playbook de la VM, lanceur isolé, services systemd
 ```
 

@@ -12,7 +12,7 @@ ASGOR (*Automated Security Grading Of Repositories*) analyse la sécurité d'un 
 
 | Domaine | Ce qui est cherché |
 |---|---|
-| **Secrets** | mots de passe, clés d'API, jetons, clés privées, dans les fichiers **et dans tout l'historique Git** |
+| **Secrets** | mots de passe, clés d'API, jetons, clés privées, dans les fichiers **et dans l'historique Git de la branche par défaut** |
 | **Dépendances** | bibliothèques utilisées (Composer, npm, pip…) qui ont une faille connue |
 | **Code** | failles dans le code PHP et Python : injection SQL, XSS, injection de commande, fonctions dangereuses… |
 
@@ -24,7 +24,7 @@ ASGOR ne modifie jamais le dépôt et n'exécute jamais son code.
 
 1. Sur la page d'accueil, collez l'adresse du dépôt dans **« URL du dépôt GitHub »**, sous la forme `https://github.com/organisation/depot`.
 2. Deux cases :
-   - **« Analyser tout l'historique Git (secrets) »** (cochée par défaut) : laissez-la cochée. Sans elle, les secrets des anciens commits ne sont pas cherchés et la note ne peut pas dépasser B.
+   - **« Analyser l'historique de la branche par défaut (secrets) »** (cochée par défaut) : laissez-la cochée. Sans elle, les secrets des anciens commits ne sont pas cherchés et la note ne peut pas dépasser B. Seule la branche par défaut du dépôt (souvent `main`) est analysée : un commit qui n'existe que sur une autre branche, jamais fusionnée, n'est pas vu.
    - **« Ne pas afficher dans les analyses récentes »** : cochez-la si vous ne voulez pas que l'analyse apparaisse sur la page d'accueil.
 3. Cliquez sur **« Analyser »**.
 
@@ -54,7 +54,7 @@ Le score baisse de **15 points chaque fois que le nombre de problèmes double** 
 
 ### Note globale
 
-La note globale est **la plus basse des trois lettres**, puis certaines règles la limitent :
+La note globale est **la plus basse des lettres des domaines notés**, puis certaines règles la limitent :
 
 | Situation | Note au maximum |
 |---|---|
@@ -62,10 +62,22 @@ La note globale est **la plus basse des trois lettres**, puis certaines règles 
 | Une faille critique | **F** |
 | Seulement des secrets « à vérifier » (voir § 5) | **D** |
 | Injection SQL, XSS ou de commande trouvée par l'analyse de flux (Psalm) | **C** |
-| Un problème moyen ou plus grave, une faille élevée corrigeable dans une dépendance, une application sans fichier de verrouillage (`composer.lock`…), l'historique non analysé, un outil en échec | **B** |
+| Un domaine **non évalué** : aucun de ses outils n'a donné de résultat | **C** |
+| Un problème moyen ou plus grave, une faille élevée corrigeable dans une dépendance, une application sans fichier de verrouillage (`composer.lock`…), l'historique non analysé, un domaine évalué **en partie** (un outil en échec, des fichiers non analysés) | **B** |
 | Aucun problème moyen ou plus grave | **A** possible |
 
 Les raisons qui fixent la note sont affichées sous les scores (« Note F : 2 secrets détectés… »).
+
+### État de chaque domaine
+
+À côté de chaque score, ASGOR indique ce qui a réellement été analysé :
+
+- **Complet** : tout a été analysé.
+- **Partiel** : une partie seulement (un outil en échec, des fichiers illisibles, l'historique Git non analysé). Le score porte sur ce qui a été vu ; la note ne dépasse pas B.
+- **Non évalué** : aucun outil du domaine n'a donné de résultat. Pas de lettre (« — ») : un « 100 » ferait croire que tout va bien. La raison est affichée (outil, cause, ce qu'on ne sait pas, quoi faire) ; la note ne dépasse pas C. **Relancez l'analyse** ; si l'échec se répète, prévenez l'administrateur.
+- **Hors périmètre** : rien à analyser avec les outils d'ASGOR (par exemple du code TypeScript : ASGOR n'analyse que le code PHP et Python). Pas de lettre et pas d'effet sur la note. La note dit alors sur quels domaines elle porte : « note calculée sur Secrets et Dépendances ».
+
+Dans un dépôt qui mélange PHP ou Python et un autre langage, le code PHP et Python est noté, et le rapport indique combien de fichiers des autres langages n'ont pas été analysés.
 
 **Pourquoi tant de F ?** Un seul secret suffit pour un F : un secret publié, même supprimé depuis, reste lisible par toute personne qui clone le dépôt. C'est voulu.
 
@@ -113,7 +125,8 @@ Ce qu'il faut savoir :
 - Un résultat écarté **ne compte plus dans la note**, pour cette analyse et **pour les analyses suivantes du même dépôt**.
 - Il reste visible dans la rubrique **« Résultats écartés »**, avec la date, l'adresse IP et le motif. Pour l'annuler, cochez-le et cliquez sur **« Rétablir la sélection »**.
 - 500 résultats au plus par envoi.
-- **Attention aux groupes de secrets** : écarter un secret écarte ce type de secret pour tout le fichier. Si un vrai secret du même type y apparaît plus tard, il sera écarté lui aussi.
+- **Secrets** : la décision porte sur les valeurs trouvées dans le fichier. Si une **nouvelle valeur** du même type y apparaît plus tard, le résultat **revient** dans le rapport et compte de nouveau dans la note : il faut l'examiner.
+- **Avec ou sans l'historique Git**, une analyse ne trouve pas toujours les mêmes valeurs (sans l'historique, les valeurs des anciens commits ne sont pas vues). Un secret écarté dans une analyse avec l'historique peut donc revenir dans une analyse sans l'historique, et inversement : il faut alors l'écarter de nouveau.
 - **N'écartez que ce que vous avez vérifié.** En cas de doute, laissez le résultat.
 
 ---

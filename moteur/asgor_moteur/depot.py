@@ -21,6 +21,30 @@ VERROUS_PYTHON = ("poetry.lock", "uv.lock", "Pipfile.lock", "pdm.lock")
 # Types de composer.json traités comme des bibliothèques (BAREME.md § 5).
 TYPES_BIBLIOTHEQUE = ("library", "symfony-bundle")
 
+# Langages dont le code n'est pas analysé par ASGOR (domaine Code : PHP et Python
+# seulement). Comptés pour le bilan de couverture (BAREME.md § 3 b).
+LANGAGES_NON_PRIS_EN_CHARGE = {
+    ".js": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript", ".jsx": "JavaScript",
+    ".ts": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript", ".tsx": "TypeScript",
+    ".vue": "Vue", ".svelte": "Svelte",
+    ".go": "Go", ".java": "Java", ".kt": "Kotlin", ".kts": "Kotlin", ".scala": "Scala",
+    ".rb": "Ruby", ".cs": "C#", ".c": "C", ".h": "C", ".cpp": "C++", ".cc": "C++",
+    ".cxx": "C++", ".hpp": "C++", ".rs": "Rust", ".swift": "Swift", ".dart": "Dart",
+    ".pl": "Perl", ".pm": "Perl", ".lua": "Lua", ".sh": "Shell", ".bash": "Shell",
+}
+
+# Fichiers de dépendances que lisent OSV-Scanner ou Trivy (en plus de ceux de PHP et
+# de Python ci-dessous). Aucun : domaine Dépendances « hors périmètre ».
+FICHIERS_DEPENDANCES = {
+    "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
+    "pnpm-lock.yaml", "bun.lock", "go.mod", "go.sum", "Cargo.toml", "Cargo.lock",
+    "Gemfile", "Gemfile.lock", "pom.xml", "build.gradle", "build.gradle.kts",
+    "gradle.lockfile", "packages.config", "packages.lock.json", "mix.exs", "mix.lock",
+    "pubspec.yaml", "pubspec.lock", "Podfile.lock", "Package.resolved", "conanfile.txt",
+    "conan.lock", "renv.lock", "setup.py", "setup.cfg",
+}
+SUFFIXES_DEPENDANCES = (".csproj", ".gemspec")
+
 
 @dataclass
 class Inventaire:
@@ -34,7 +58,16 @@ class Inventaire:
     pyproject: list = field(default_factory=list)
     pipfile: list = field(default_factory=list)
     dossiers_tiers: list = field(default_factory=list)  # vendor, node_modules…
+    # Fichiers de code non analysés : {langage: nombre} (bibliothèques .min.js exclues)
+    non_pris_en_charge: dict = field(default_factory=dict)
+    nb_autres_dependances: int = 0   # package.json, go.mod… (FICHIERS_DEPENDANCES)
     tronque: bool = False
+
+    @property
+    def fichiers_dependances(self) -> bool:
+        return bool(self.composer_json or self.composer_lock or self.requirements
+                    or self.verrous_python or self.pyproject or self.pipfile
+                    or self.nb_autres_dependances)
 
     @property
     def php(self) -> bool:
@@ -70,6 +103,12 @@ def inventorier(racine: str) -> Inventaire:
                 inv.nb_php += 1
             elif nom.endswith(".py"):
                 inv.nb_python += 1
+            elif not nom.endswith(".min.js"):
+                langage = LANGAGES_NON_PRIS_EN_CHARGE.get(os.path.splitext(nom)[1].lower())
+                if langage:
+                    inv.non_pris_en_charge[langage] = inv.non_pris_en_charge.get(langage, 0) + 1
+            if nom in FICHIERS_DEPENDANCES or nom.endswith(SUFFIXES_DEPENDANCES):
+                inv.nb_autres_dependances += 1
             cible = None
             if nom == "composer.json":
                 cible = inv.composer_json

@@ -152,3 +152,37 @@ class Ecartes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EtatsApresEcart(unittest.TestCase):
+    """Barème 3 : écarter un résultat recalcule la note sans perdre l'état des domaines."""
+
+    def test_non_evalue_et_raison_conserves(self):
+        r = rapport_exemple()
+        problemes = [ecartes._probleme(p) for p in r["problemes"]]
+        contexte = Contexte(outils_en_echec={"dependances": ["Trivy", "OSV-Scanner"]},
+                            outils_reussis={SECRETS: ["Gitleaks"], CODE: ["Opengrep"]},
+                            raisons_echec={"Trivy": "délai dépassé", "OSV-Scanner": "échec simulé"},
+                            fichiers_non_analyses={CODE: ["b.py (Bandit : syntax error)"]})
+        r["note"] = noter(problemes, contexte)
+        self.assertEqual(r["note"]["domaines"]["dependances"]["etat"], "non évalué")
+        avant = copy.deepcopy(r["note"]["domaines"])
+        self.assertTrue(ecartes.appliquer(r, [r["problemes"][0]["id"]]))
+        apres = r["note"]["domaines"]
+        for d in ("dependances", "code"):
+            for cle in ("etat", "raison", "outils_reussis", "fichiers_non_analyses"):
+                self.assertEqual(apres[d][cle], avant[d][cle], (d, cle))
+        self.assertIn("Trivy (délai dépassé)", apres["dependances"]["raison"])
+        self.assertEqual(r["note"]["globale"], "C")
+
+    def test_hors_perimetre_conserve(self):
+        r = rapport_exemple()
+        r["problemes"] = r["problemes"][:1]   # seulement le secret
+        problemes = [ecartes._probleme(p) for p in r["problemes"]]
+        r["note"] = noter(problemes, Contexte(outils_reussis={SECRETS: ["Gitleaks"]},
+                                              hors_perimetre={CODE: "aucun fichier PHP ou Python",
+                                                              "dependances": "aucun fichier"}))
+        ecartes.appliquer(r, [r["problemes"][0]["id"]])
+        self.assertEqual(r["note"]["domaines"][CODE]["etat"], "hors périmètre")
+        self.assertEqual(r["note"]["globale"], "A")
+        self.assertTrue(r["note"]["portee"].startswith("note calculée sur Secrets."))

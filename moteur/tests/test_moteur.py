@@ -5,6 +5,7 @@ Les exemples de sorties d'outils sont écrits à la main d'après leur format
 connu. Ils devront être confrontés à de vraies sorties (étape 3).
 """
 
+import functools
 import os
 import tempfile
 import unittest
@@ -17,6 +18,9 @@ from asgor_moteur.modele import (
     CODE, CRITIQUE, DEPENDANCES, ELEVEE, FAIBLE, MOYENNE, SECRETS, Probleme, masquer_secret,
 )
 from asgor_moteur.notation import Contexte, lettre_depuis_score, noter
+
+CLE_TEST = b"k" * 32
+lire_gitleaks = functools.partial(analyseurs.lire_gitleaks, cle=CLE_TEST)
 
 
 class Masquage(unittest.TestCase):
@@ -41,7 +45,7 @@ class Gitleaks(unittest.TestCase):
     ]
 
     def test_secret_jamais_en_clair(self):
-        problemes = analyseurs.lire_gitleaks(self.SORTIE)
+        problemes = lire_gitleaks(self.SORTIE)
         self.assertEqual(len(problemes), 1)  # même secret dans deux commits
         p = problemes[0]
         self.assertEqual(p.occurrences, 2)
@@ -57,12 +61,12 @@ class Gitleaks(unittest.TestCase):
                    "Commit": "c" * 40, "Secret": f"vecteur{i:06d}abcdef"} for i in range(905, 0, -1)]
         sortie += [{"RuleID": "generic-api-key", "File": "test/cbc_vectors.js", "StartLine": i,
                     "Commit": "c" * 40, "Secret": f"autre{i:06d}abcdef"} for i in range(1, 96)]
-        problemes = analyseurs.lire_gitleaks(sortie)
+        problemes = lire_gitleaks(sortie)
         self.assertEqual(sorted(p.occurrences for p in problemes), [95, 905])
         ccm, = [p for p in problemes if p.fichier == "test/ccm_vectors.js"]
         self.assertEqual(ccm.ligne, 1)            # première occurrence, ordre fixe
         # Même identifiant quel que soit l'ordre de sortie de Gitleaks
-        inverse = analyseurs.lire_gitleaks(list(reversed(sortie)))
+        inverse = lire_gitleaks(list(reversed(sortie)))
         self.assertEqual(sorted(p.empreinte for p in problemes), sorted(p.empreinte for p in inverse))
 
     def test_secret_a_verifier(self):
@@ -77,19 +81,54 @@ class Gitleaks(unittest.TestCase):
                                 ("pkg/db_test.go", True), ("src/Test.php", False), ("latest.js", False),
                                 ("src/usertest.php", False), ("contest_x.py", False), ("Test.js", False)):
             self.assertEqual(analyseurs.chemin_a_verifier(chemin), attendu, chemin)
-        p, = analyseurs.lire_gitleaks([{"RuleID": "jwt", "File": "tests/Oauth.php", "StartLine": 3,
+        p, = lire_gitleaks([{"RuleID": "jwt", "File": "tests/Oauth.php", "StartLine": 3,
                                         "Secret": "eyJhbGciOiJIUzI1NiJ9.abc.def"}])
         self.assertTrue(p.a_verifier)
         self.assertEqual(p.gravite, ELEVEE)
         self.assertNotIn("eyJhbGciOiJIUzI1NiJ9.abc", repr(p.en_dict()))
 
+    def test_dossier_src_du_depot_garde(self):
+        # Gitleaks (mode git) donne un chemin relatif au dépôt : le « src/ » d'un
+        # projet Symfony est un vrai dossier, il doit rester (sinon mauvais lien GitHub).
+        p, = lire_gitleaks([{"RuleID": "generic-api-key", "File": "src/Service/Temoin.php",
+                                        "StartLine": 5, "Secret": "Fictif-Valeur-1234"}])
+        self.assertEqual(p.fichier, "src/Service/Temoin.php")
+
+    def test_nouvelle_valeur_nouvel_identifiant(self):
+        # Constat de la revue du 18/11/2026 : écarter une première valeur ne doit pas
+        # masquer une seconde valeur du même type dans le même fichier.
+        premiere = {"RuleID": "generic-api-key", "File": "config/prod.php", "StartLine": 3,
+                    "Commit": "a" * 40, "Secret": "Fictif-Premiere-1234"}
+        seconde = {"RuleID": "generic-api-key", "File": "config/prod.php", "StartLine": 9,
+                   "Commit": "b" * 40, "Secret": "Fictif-Seconde-5678"}
+        a, = lire_gitleaks([premiere])
+        b, = lire_gitleaks([premiere, seconde])
+        c, = lire_gitleaks([dict(premiere, StartLine=40, Commit="c" * 40)])
+        self.assertNotEqual(a.empreinte, b.empreinte)
+        self.assertEqual(a.empreinte, c.empreinte)   # même valeur ailleurs : même décision
+        self.assertEqual(len(a.empreinte), 16)
+
+    def test_empreinte_depend_de_la_cle(self):
+        sortie = [{"RuleID": "generic-api-key", "File": "a.php", "Secret": "Fictif-1234"}]
+        a, = lire_gitleaks(sortie)
+        b, = analyseurs.lire_gitleaks(sortie, cle=b"z" * 32)
+        self.assertNotEqual(a.empreinte, b.empreinte)
+        d = a.en_dict()
+        self.assertNotIn("empreinte_valeurs", d)
+        self.assertNotIn("Fictif-1234", repr(d))
+
+    def test_cle_absente_ou_courte_refusee(self):
+        for cle in (None, b"", b"k" * 31, "k" * 32):
+            with self.assertRaises((ValueError, TypeError)):
+                analyseurs.lire_gitleaks([{"RuleID": "x", "Secret": "y"}], cle=cle)
+
     def test_rapport_vide(self):
-        self.assertEqual(analyseurs.lire_gitleaks([]), [])
-        self.assertEqual(analyseurs.lire_gitleaks(None), [])
+        self.assertEqual(lire_gitleaks([]), [])
+        self.assertEqual(lire_gitleaks(None), [])
 
     def test_forme_inattendue(self):
         with self.assertRaises(analyseurs.FormatInattendu):
-            analyseurs.lire_gitleaks({"erreur": 1})
+            lire_gitleaks({"erreur": 1})
 
 
 class Dependances(unittest.TestCase):
@@ -227,6 +266,19 @@ class Code(unittest.TestCase):
         p, = analyseurs.lire_bandit(self.BANDIT)
         self.assertEqual((p.gravite, p.fichier), (FAIBLE, "app/vues.py"))
 
+    def test_bandit_mot_de_passe_jamais_recopie(self):
+        # Textes réels de Bandit 1.9.4 (vérifiés le 18/11/2026) : ils contiennent la valeur.
+        resultats = [{"test_id": t, "test_name": "hardcoded_password", "filename": "src/app.py",
+                      "line_number": 1, "issue_severity": "LOW", "issue_confidence": "MEDIUM",
+                      "issue_text": f"Possible hardcoded password: 'Fictif-{t}-1234'",
+                      "code": f"1 password = 'Fictif-{t}-1234'\n"}
+                     for t in ("B105", "B106", "B107")]
+        problemes = analyseurs.lire_bandit({"results": resultats})
+        self.assertEqual(len(problemes), 3)
+        for p in problemes:
+            self.assertNotIn("Fictif-", repr(p.en_dict()))
+            self.assertIn("Mot de passe", p.explication)
+
     def test_psalm_semgrep_opengrep_un_seul_probleme(self):
         problemes = (analyseurs.lire_psalm(self.PSALM)
                      + analyseurs.lire_semgrep(self.SEMGREP)
@@ -268,7 +320,7 @@ class Notation(unittest.TestCase):
         self.assertEqual(note["domaines"][DEPENDANCES]["score"], 85)   # total 1
         self.assertEqual(note["domaines"][CODE]["score"], 90)          # total 0,6
         self.assertEqual(note["globale"], "B")
-        self.assertEqual(note["version_bareme"], 2)
+        self.assertEqual(note["version_bareme"], 3)
 
     def test_exemple_2_secret_dans_l_historique(self):
         note = noter([self._p(SECRETS, CRITIQUE, commit="a" * 40)])
@@ -342,9 +394,75 @@ class Notation(unittest.TestCase):
         self.assertEqual(note["globale"], "B")
 
     def test_outil_en_echec(self):
+        # Rapport ancien (outils réussis inconnus) : partiel, B au maximum, comme avant.
         note = noter([], Contexte(outils_en_echec={CODE: ["Psalm"]}))
         self.assertEqual(note["globale"], "B")
-        self.assertEqual(note["domaines"][CODE]["evaluation"], "incomplète")
+        self.assertEqual(note["domaines"][CODE]["etat"], "partiel")
+
+    def test_partiel_un_outil_sur_deux(self):
+        note = noter([], Contexte(outils_en_echec={CODE: ["Psalm"]},
+                                  outils_reussis={CODE: ["Opengrep"]},
+                                  raisons_echec={"Psalm": "délai dépassé"}))
+        d = note["domaines"][CODE]
+        self.assertEqual((d["etat"], d["score"], d["lettre"]), ("partiel", 100, "A"))
+        self.assertEqual(note["globale"], "B")
+        self.assertIn("Psalm (délai dépassé)", note["plafonnements"][0]["raison"])
+
+    def test_non_evalue_c_au_maximum_avec_la_raison(self):
+        # Constat de la revue : Gitleaks en échec donnait Secrets 100/100, A.
+        note = noter([], Contexte(outils_en_echec={SECRETS: ["Gitleaks"]},
+                                  outils_reussis={DEPENDANCES: ["Trivy"], CODE: ["Bandit"]},
+                                  raisons_echec={"Gitleaks": "délai dépassé"}))
+        d = note["domaines"][SECRETS]
+        self.assertEqual((d["etat"], d["score"], d["lettre"]), ("non évalué", None, None))
+        self.assertEqual(note["globale"], "C")
+        raison = note["plafonnements"][0]["raison"]
+        for morceau in ("Gitleaks (délai dépassé)", "ne peut pas dire si le dépôt contient des secrets",
+                        "Relancez l'analyse", "prévenez l'administrateur"):
+            self.assertIn(morceau, raison)
+        self.assertEqual(note["portee"], "note calculée sur Dépendances et Code. "
+                                         "Secrets : non évalué (raison détaillée dans le rapport).")
+
+    def test_non_evalue_garde_les_plafonds_plus_severes(self):
+        critique = self._p(DEPENDANCES, CRITIQUE)
+        note = noter([critique], Contexte(outils_en_echec={SECRETS: ["Gitleaks"]},
+                                          outils_reussis={DEPENDANCES: ["Trivy"]}))
+        self.assertEqual(note["globale"], "F")
+
+    def test_hors_perimetre_sans_lettre_ni_plafond(self):
+        # Constat de la revue : dépôt TypeScript, Code 100/100 A « complète ».
+        raison = "aucun fichier PHP ou Python ; TypeScript : 120 fichiers, langage non pris en charge par ASGOR"
+        note = noter([], Contexte(outils_reussis={SECRETS: ["Gitleaks"], DEPENDANCES: ["Trivy"]},
+                                  hors_perimetre={CODE: raison}))
+        d = note["domaines"][CODE]
+        self.assertEqual((d["etat"], d["score"], d["lettre"]), ("hors périmètre", None, None))
+        self.assertEqual(note["globale"], "A")
+        self.assertEqual(note["tous_les_plafonnements"], [])
+        self.assertEqual(note["portee"], "note calculée sur Secrets et Dépendances. "
+                                         f"Code : hors périmètre ({raison}).")
+
+    def test_hors_perimetre_ignore_si_un_probleme_existe(self):
+        note = noter([self._p(DEPENDANCES, MOYENNE)],
+                     Contexte(outils_reussis={DEPENDANCES: ["Trivy"]},
+                              hors_perimetre={DEPENDANCES: "aucun fichier de dépendances"}))
+        self.assertEqual(note["domaines"][DEPENDANCES]["etat"], "complet")
+
+    def test_fichiers_non_analyses_partiel(self):
+        note = noter([], Contexte(outils_reussis={CODE: ["Bandit"]},
+                                  fichiers_non_analyses={CODE: ["a.py (Bandit : syntax error)"]}))
+        self.assertEqual(note["domaines"][CODE]["etat"], "partiel")
+        self.assertEqual(note["globale"], "B")
+        self.assertIn("1 fichier n'a pas pu être analysé", note["plafonnements"][0]["raison"])
+
+    def test_aucun_domaine_note(self):
+        note = noter([], Contexte(outils_en_echec={SECRETS: ["Gitleaks"]}, outils_reussis={},
+                                  hors_perimetre={DEPENDANCES: "aucun fichier", CODE: "aucun fichier"}))
+        self.assertIsNone(note["globale"])
+        self.assertTrue(note["plafonnements"])
+        self.assertTrue(note["portee"].startswith("aucun domaine n'a pu être noté."))
+
+    def test_trois_domaines_notes_sans_portee(self):
+        self.assertEqual(noter([])["portee"], "")
 
 
 class Inventaire(unittest.TestCase):

@@ -99,7 +99,13 @@ def pluriel(n, singulier, pluriel_=None) -> str:
     return singulier if isinstance(n, (int, float)) and abs(n) < 2 else (pluriel_ or singulier + "s")
 
 
+def capitalize_premiere(texte) -> str:
+    """Majuscule à la première lettre seulement (« domaine Code… » → « Domaine Code… »)."""
+    return texte[:1].upper() + texte[1:] if isinstance(texte, str) else ""
+
+
 FILTRES = {
+    "capitalize_premiere": capitalize_premiere,
     "date": date_lisible,
     "heure": heure_lisible,
     "duree": duree_lisible,

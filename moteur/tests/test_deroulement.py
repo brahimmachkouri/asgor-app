@@ -120,6 +120,9 @@ class Deroulement(unittest.TestCase):
         self.tmp = tmp.name
         self.analyses = os.path.join(self.tmp, "jobs")
         os.makedirs(self.analyses)
+        self.cle = os.path.join(self.tmp, "empreintes.key")
+        with open(self.cle, "wb") as f:
+            f.write(b"k" * 32)
 
     def _analyser(self, en_echec=(), lanceur=None, **options):
         correctifs = [
@@ -127,6 +130,7 @@ class Deroulement(unittest.TestCase):
             mock.patch.object(moteur, "RAPPORTS", os.path.join(self.tmp, "reports")),
             mock.patch.object(moteur, "JOURNAUX", os.path.join(self.tmp, "logs")),
             mock.patch.object(moteur, "VERROU", os.path.join(self.tmp, "verrou")),
+            mock.patch.object(moteur, "CLE_EMPREINTES", self.cle),
             mock.patch.object(moteur, "Lanceur", lanceur or _faux_lanceur(self.analyses, en_echec)),
             mock.patch.object(moteur.os, "geteuid", lambda: 0),
             mock.patch.object(moteur.os.path, "ismount", lambda chemin: True),
@@ -202,8 +206,26 @@ class Deroulement(unittest.TestCase):
         note = rapport["note"]
         self.assertEqual(note["domaines"]["code"]["outils_en_echec"], ["Psalm"])
         self.assertEqual(note["domaines"]["secrets"]["outils_en_echec"], ["Gitleaks"])
-        self.assertEqual(note["domaines"]["secrets"]["evaluation"], "incomplète")
+        # Gitleaks seul outil des secrets : domaine non évalué, note C au maximum.
+        self.assertEqual(note["domaines"]["secrets"]["etat"], "non évalué")
+        self.assertIsNone(note["domaines"]["secrets"]["score"])
+        self.assertIsNone(note["domaines"]["secrets"]["lettre"])
+        # Psalm en échec, Opengrep réussi : domaine Code partiel.
+        self.assertEqual(note["domaines"]["code"]["etat"], "partiel")
+        self.assertIsInstance(note["domaines"]["code"]["score"], int)
+        self.assertIn(note["globale"], "CDEF")
+        self.assertTrue(any(p["note_max"] == "C" and "Gitleaks" in p["raison"]
+                            and "secrets" in p["raison"] for p in note["tous_les_plafonnements"]))
         self.assertTrue(any("Psalm" in a for a in rapport["avertissements"]))
+
+    def test_cle_d_empreinte_absente(self):
+        # Sans clé, Gitleaks est en échec (pas d'identifiant calculable sans clé).
+        os.remove(self.cle)
+        _, rapport = self._analyser()
+        note = rapport["note"]
+        self.assertEqual(note["domaines"]["secrets"]["outils_en_echec"], ["Gitleaks"])
+        self.assertFalse(any(p["domaine"] == "secrets" for p in rapport["problemes"]))
+        self.assertTrue(any("clé d'empreinte" in a for a in rapport["avertissements"]))
 
     def test_phpstan_en_echec_sans_effet_sur_la_note(self):
         _, normal = self._analyser()
@@ -248,7 +270,7 @@ class Lot1(Deroulement):
         details = {e[1]: e[3] for e in termines}
         self.assertEqual(details["clonage"], "412 commits, 1 Mo")
         self.assertEqual(details["langages"], "PHP, Python")
-        self.assertEqual(details["secrets"], "Gitleaks, tout l'historique — 1 secret détecté")
+        self.assertEqual(details["secrets"], "Gitleaks, historique de la branche par défaut — 1 secret détecté")
         self.assertEqual(details["dependances"], "Composer Audit, pip-audit, OSV-Scanner, Trivy")
         self.assertEqual(details["note"], "note F")
         self.assertIn(("depot", "a" * 40, "main", 412), obs.evenements)
@@ -287,6 +309,60 @@ class Lot1(Deroulement):
         noms = [e["nom"] for e in rapport["etapes"]]
         self.assertLess(noms.index("gitleaks"), noms.index("base-trivy"))
         self.assertLess(noms.index("commit-distant"), noms.index("clonage"))
+
+    def _lanceur_modifie(self, apres_clonage=None, sorties=None):
+        """Faux lanceur dont le dépôt cloné ou certaines sorties d'outils changent."""
+        lanceur = _faux_lanceur(self.analyses)
+        simuler = lanceur._simuler
+
+        def modifie(self_, nom):
+            simuler(self_, nom)
+            if nom == "clonage" and apres_clonage:
+                apres_clonage(self_)
+            if sorties and nom in sorties:
+                self_._ecrire(*sorties[nom])
+        lanceur._simuler = modifie
+        return lanceur
+
+    def test_depot_typescript_code_hors_perimetre(self):
+        def typescript(self_):
+            for chemin in ("src/index.php", "src/app/vues.py", "src/composer.json",
+                           "src/composer.lock", "src/requirements.txt", "src/back/composer.json",
+                           "src/back/composer.lock", "src/packages/x-bundle/composer.json"):
+                os.remove(os.path.join(self_.dossier, chemin))
+            for n in range(3):
+                self_._ecrire(f"src/web/c{n}.ts", "export {}")
+            self_._ecrire("src/web/lib.min.js", "")   # bibliothèque minifiée : pas comptée
+        _, rapport = self._analyser(lanceur=self._lanceur_modifie(typescript))
+        code = rapport["note"]["domaines"]["code"]
+        self.assertEqual((code["etat"], code["score"], code["lettre"]), ("hors périmètre", None, None))
+        self.assertIn("TypeScript : 3 fichiers, langage non pris en charge par ASGOR", code["raison"])
+        self.assertIn("note calculée sur Secrets et Dépendances.", rapport["note"]["portee"])
+        self.assertEqual(rapport["depot"]["fichiers_non_pris_en_charge"], {"TypeScript": 3})
+
+    def test_depot_melange_couverture_sans_plafond(self):
+        def avec_typescript(self_):
+            for n in range(2):
+                self_._ecrire(f"src/web/c{n}.ts", "export {}")
+        _, rapport = self._analyser(lanceur=self._lanceur_modifie(avec_typescript))
+        self.assertEqual(rapport["note"]["domaines"]["code"]["etat"], "complet")
+        self.assertIn("Fichiers de code non analysés (langage non pris en charge par ASGOR) : "
+                      "TypeScript : 2 fichiers.", rapport["avertissements"])
+        self.assertFalse(any("TypeScript" in p["raison"]
+                             for p in rapport["note"]["tous_les_plafonnements"]))
+
+    def test_bandit_fichier_illisible_domaine_partiel(self):
+        # Constat de la revue : l'erreur de Bandit était perdue.
+        sortie = dict(exemples.Code.BANDIT, errors=[
+            {"filename": "src/app/casse.py", "reason": "syntax error while parsing AST from file"}])
+        lanceur = self._lanceur_modifie(sorties={"bandit": ("out/bandit.json", sortie)})
+        _, rapport = self._analyser(lanceur=lanceur)
+        code = rapport["note"]["domaines"]["code"]
+        self.assertEqual(code["etat"], "partiel")
+        self.assertEqual(code["fichiers_non_analyses"],
+                         ["app/casse.py (Bandit : syntax error while parsing AST from file)"])
+        self.assertTrue(any(p["note_max"] == "B" and "1 fichier n'a pas pu être analysé" in p["raison"]
+                            for p in rapport["note"]["tous_les_plafonnements"]))
 
     def test_groupes_ignores_sans_php(self):
         obs = Enregistreur()
@@ -397,7 +473,7 @@ class FormatDuRapport(Deroulement):
 
     def test_cles_et_types(self):
         _, r = self._analyser()
-        self.assertEqual(r["version_format"], 2)
+        self.assertEqual(r["version_format"], 3)
         attendu = {"version_format": int, "analyse": dict, "depot": dict, "note": dict,
                    "problemes": list, "qualite": dict, "avertissements": list,
                    "outils": dict, "outils_non_lances": list, "etapes": list}

@@ -4,12 +4,16 @@ Les données reprennent la forme et les valeurs des vraies sorties des outils
 pour symfony/yaml 8.1.2 dans DVWA.
 """
 
+import functools
 import unittest
 
 from asgor_moteur import analyseurs, versions
 from asgor_moteur.fusion import supprimer_doublons
 from asgor_moteur.modele import CODE, CRITIQUE, ELEVEE, MOYENNE, SECRETS, Probleme
 from asgor_moteur.notation import noter
+
+CLE_TEST = b"k" * 32
+lire_gitleaks = functools.partial(analyseurs.lire_gitleaks, cle=CLE_TEST)
 
 INSTALLEE = "v8.1.2"
 
@@ -90,10 +94,10 @@ class VersionsDansLesAnalyseurs(unittest.TestCase):
 
 class TitresDesSecrets(unittest.TestCase):
     def test_titre_en_francais(self):
-        p, = analyseurs.lire_gitleaks([{"RuleID": "generic-api-key", "Secret": "6LelXXXXXXXXXXXX",
+        p, = lire_gitleaks([{"RuleID": "generic-api-key", "Secret": "6LelXXXXXXXXXXXX",
                                        "Description": "Detected a Generic API Key, potentially..."}])
         self.assertEqual(p.titre, "Secret détecté : Clé d'API")
-        q, = analyseurs.lire_gitleaks([{"RuleID": "regle-rare", "Secret": "x" * 20}])
+        q, = lire_gitleaks([{"RuleID": "regle-rare", "Secret": "x" * 20}])
         self.assertEqual(q.titre, "Secret détecté (règle regle-rare)")
 
 

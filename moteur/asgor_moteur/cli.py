@@ -6,20 +6,25 @@ import sys
 from .avancement import ObservateurTerminal
 from .modele import DOMAINES, GRAVITES, NOMS_DOMAINES
 from .moteur import Analyse, AnalyseEnCours, AnalyseImpossible
+from .notation import COMPLET
 from .url import UrlInvalide, valider_url
 
 
 def _resume(rapport: dict, chemin: str) -> str:
     note = rapport["note"]
-    lignes = ["", f"Note globale : {note['globale']}"]
+    lignes = ["", f"Note globale : {note['globale'] or '—'}"]
+    if note.get("portee"):
+        lignes.append(f"  {note['portee']}")
     for plafonnement in note["plafonnements"]:
         lignes.append(f"  Raison de la note {plafonnement['note_max']} : {plafonnement['raison']}")
     lignes.append("")
     for domaine in DOMAINES:
         d = note["domaines"][domaine]
-        incomplet = "  (évaluation incomplète)" if d["evaluation"] != "complète" else ""
-        lignes.append(f"  {NOMS_DOMAINES[domaine]:<12} {d['score']:>3}/100  {d['lettre']}"
-                      f"  {d['problemes']} problème(s){incomplet}")
+        # Barème 3 : score et lettre absents (None) si le domaine n'est pas noté.
+        score = "  —" if d["score"] is None else f"{d['score']:>3}"
+        etat = "" if d["etat"] == COMPLET else f"  ({d['etat']}{' : ' + d['raison'] if d['raison'] else ''})"
+        lignes.append(f"  {NOMS_DOMAINES[domaine]:<12} {score}/100  {d['lettre'] or '—'}"
+                      f"  {d['problemes']} problème(s){etat}")
     lignes.append("")
     compte = {g: 0 for g in GRAVITES}
     for p in rapport["problemes"]:

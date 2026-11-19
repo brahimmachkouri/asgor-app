@@ -23,7 +23,7 @@
     </div>
     <div class="options">
       <label class="case"><input type="checkbox" name="masquee" value="oui"{% if masquee_cochee %} checked{% endif %}>Ne pas afficher dans les analyses récentes</label>
-      <label class="case"><input type="checkbox" name="historique" value="oui"{% if historique_coche %} checked{% endif %}>Analyser tout l'historique Git (secrets)</label>
+      <label class="case"><input type="checkbox" name="historique" value="oui"{% if historique_coche %} checked{% endif %}>Analyser l'historique de la branche par défaut (secrets)</label>
     </div>
     <p class="petit">Dépôts publics de github.com uniquement. Taille maximale : 500 Mo. Durée maximale d'une analyse : 30 minutes. Sans l'historique Git, la note est B au maximum.</p>
   </form>
@@ -40,7 +40,7 @@
       <tbody>
         {% for r in recentes %}
         <tr>
-          <td><span class="pastille {{ r.note | classe_note }}">{{ r.note }}</span></td>
+          <td><span class="pastille {{ r.note | classe_note }}">{{ r.note or "—" }}</span></td>
           <td><a class="mono" href="/analyses/{{ r.id }}">github.com/{{ r.proprietaire }}/{{ r.nom }}</a></td>
           <td class="mono">{{ r.commit_sha | court }}</td>
           <td>{{ r.fin | date }}</td>

@@ -29,9 +29,27 @@ def contexte_depuis_rapport(rapport: dict) -> Contexte:
                          if isinstance(p.get("raison"), str)
                          and p["raison"].startswith(_PREFIXE_VERROUILLAGE)]
     historique = rapport.get("analyse", {}).get("historique_complet", True)
+    domaines = {d: note.get("domaines", {}).get(d, {}) for d in DOMAINES}
+    # Barème 3 : « etat » et « outils_reussis » sont dans le rapport. Rapport plus
+    # ancien : outils réussis inconnus (un échec garde le domaine « partiel »).
+    if all("etat" in v and isinstance(v.get("outils_reussis"), list) for v in domaines.values()):
+        reussis = {d: list(v["outils_reussis"]) for d, v in domaines.items()}
+    else:
+        reussis = None
+    raisons = {}
+    for v in domaines.values():
+        if isinstance(v.get("raisons_echec"), dict):
+            raisons.update(v["raisons_echec"])
     return Contexte(outils_en_echec={d: e for d, e in echecs.items() if e},
                     sans_verrouillage=sans_verrouillage,
-                    historique_non_analyse=not historique)
+                    historique_non_analyse=not historique,
+                    outils_reussis=reussis,
+                    raisons_echec=raisons,
+                    hors_perimetre={d: v["hors_perimetre"] for d, v in domaines.items()
+                                    if v.get("hors_perimetre")},
+                    fichiers_non_analyses={d: list(v["fichiers_non_analyses"])
+                                           for d, v in domaines.items()
+                                           if v.get("fichiers_non_analyses")})
 
 
 def _probleme(d: dict) -> Probleme:

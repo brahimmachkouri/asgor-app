@@ -82,6 +82,9 @@ class Probleme:
     occurrences: int = 1
     a_verifier: bool = False   # secret dans un fichier de test, doc, exemple (BAREME.md § 6)
     ecarte: bool = False       # écarté comme faux positif par l'équipe
+    # HMAC des valeurs du secret (clé de l'instance) : une nouvelle valeur donne un
+    # nouvel identifiant, donc une nouvelle décision. Jamais écrit dans le rapport.
+    empreinte_valeurs: str = ""
     # Dépendances
     paquet: str = ""
     version: str = ""
@@ -97,7 +100,9 @@ class Probleme:
         """Identifiant stable : le même problème garde le même identifiant
         d'une analyse à l'autre. Ne contient jamais le secret lui-même."""
         if self.domaine == SECRETS:
-            parties = [self.regle, self.fichier]   # un problème par fichier et par règle
+            # Un problème par fichier et par règle ; l'empreinte des valeurs fait qu'un
+            # faux positif écarté ne masque jamais une nouvelle valeur du même fichier.
+            parties = [self.regle, self.fichier, self.empreinte_valeurs]
         elif self.domaine == DEPENDANCES:
             parties = [self.paquet.lower(), identifiant_principal(self.identifiants), self.fichier]
         else:
@@ -108,6 +113,7 @@ class Probleme:
     def en_dict(self) -> dict:
         d = asdict(self)
         d["id"] = self.empreinte
+        d.pop("empreinte_valeurs", None)
         d["outils"] = sorted(set(self.outils))
         d["identifiants"] = sorted(set(self.identifiants))
         # On retire les champs vides pour garder un rapport lisible.
