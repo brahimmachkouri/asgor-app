@@ -103,6 +103,13 @@ verifier() {
   docker compose exec -T worker cat "$rapport" > "$TEMP/piege.json"
   python3 docker/verifier-depot-piege.py "$TEMP/piege.json"
 
+  titre "Rapport du dépôt piège (JSON compressé, pour comparaison avec une autre installation)"
+  # Pour le relire : copier les lignes entre les deux repères, puis base64 -d | gunzip.
+  # Secrets masqués (4 premiers caractères), et ceux d'un dépôt de test public.
+  echo "--- début du rapport ---"
+  gzip -9c "$TEMP/piege.json" | base64 | fold -w 76
+  echo "--- fin du rapport ---"
+
   if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::endgroup::"; fi
   echo "Image vérifiée ($(uname -m))."
 }
