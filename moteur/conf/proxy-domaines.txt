@@ -1,0 +1,31 @@
+# Domaines que les étapes « fetch » peuvent joindre par le proxy de sortie (port 443).
+# Un nom par ligne, écrit exactement (pas de joker). Chaque refus est journalisé par
+# le proxy : c'est ainsi qu'on complète cette liste.
+
+# Clonage et informations du dépôt
+github.com
+api.github.com
+codeload.github.com
+
+# composer install
+repo.packagist.org
+packagist.org
+objects.githubusercontent.com
+# Paquets Packagist hébergés hors de GitHub (19/11/2026, décision de Sub : vu sur
+# uniServices avec gitlab.com). Un autre serveur reste refusé : dépendances non
+# installées, signalé par un avertissement du rapport.
+gitlab.com
+bitbucket.org
+
+# pip-audit (service de failles par défaut)
+pypi.org
+
+# Base de failles de Trivy
+mirror.gcr.io
+ghcr.io
+pkg-containers.githubusercontent.com
+
+# Base de failles d'OSV-Scanner ; deps.dev : dépendances indirectes (vu le 19/11/2026,
+# demandé pendant le téléchargement de la base, joignable depuis la VM)
+osv-vulnerabilities.storage.googleapis.com
+api.deps.dev

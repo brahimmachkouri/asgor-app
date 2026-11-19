@@ -1,0 +1,14 @@
+# Tout est exclu, sauf ce que le Dockerfile copie (aucun secret, aucune adresse,
+# pas d'inventaire Ansible).
+*
+!versions-outils.json
+!docker/
+!asgor-ansible/files/outils-python/
+!moteur/asgor_moteur/
+!moteur/conf/
+!moteur/bin/asgor-worker
+!moteur/bin/asgor-scan
+!web/requirements.txt
+!web/asgor_web/
+!web/bin/asgor-web
+**/__pycache__

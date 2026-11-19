@@ -224,7 +224,7 @@ cd asgor-ansible
 cp inventory.ini.exemple inventory.ini   # adresse de la VM
 cp reseau.yml.exemple reseau.yml         # IP d'administration et du reverse proxy
 ansible-galaxy collection install -r requirements.yml
-./verifier-signatures.sh                 # doit finir par « Tout est vérifié. »
+./verifier-signatures.sh                 # doit finir par « Tout est vérifié (linux/amd64 et linux/arm64). »
 ansible-playbook -i inventory.ini asgor.yml --check --diff
 ansible-playbook -i inventory.ini asgor.yml
 ```

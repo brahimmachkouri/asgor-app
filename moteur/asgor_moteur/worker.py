@@ -165,7 +165,7 @@ class Worker:
         """Après chaque analyse : le dossier de l'analyse est supprimé en entier."""
         if not module_moteur.identifiant_valide(identifiant):
             return
-        shutil.rmtree(os.path.join(self.dossier_analyses, identifiant), ignore_errors=True)
+        fichiers.supprimer_arbre(os.path.join(self.dossier_analyses, identifiant))
 
     def executer(self, ligne) -> None:
         identifiant = ligne["id"]
@@ -239,13 +239,22 @@ class Worker:
 
 
 def main() -> int:
-    if os.geteuid() != 0:
-        print("asgor-worker doit être lancé en root", file=sys.stderr)
-        return 2
-    if not os.path.ismount(module_moteur.DONNEES):
-        print(f"{module_moteur.DONNEES} n'est pas monté sur le disque de données : arrêt",
-              file=sys.stderr)
-        return 2
+    if module_moteur.mode_docker():
+        # Image Docker : compte 10001, données dans des volumes, outils par le filtre.
+        try:
+            from . import demarrage_docker
+            demarrage_docker.preparer(module_moteur.CLE_EMPREINTES)
+        except demarrage_docker.DemarrageImpossible as e:
+            print(f"asgor-worker : {e}", file=sys.stderr)
+            return 2
+    else:
+        if os.geteuid() != 0:
+            print("asgor-worker doit être lancé en root", file=sys.stderr)
+            return 2
+        if not os.path.ismount(module_moteur.DONNEES):
+            print(f"{module_moteur.DONNEES} n'est pas monté sur le disque de données : arrêt",
+                  file=sys.stderr)
+            return 2
     worker = Worker()
 
     def arreter(_signal, _cadre):

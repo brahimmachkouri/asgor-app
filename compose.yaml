@@ -1,0 +1,90 @@
+# ASGOR — services de l'image Docker (développement : construit l'image localement).
+#   docker compose up -d --build          puis http://127.0.0.1:8000
+#   docker compose exec worker python3 -m asgor_moteur.autotest_docker   (autotest d'isolation)
+# Linux : DOCKER_GID=<groupe propriétaire de /var/run/docker.sock> dans un fichier .env
+# (getent group docker). Docker Desktop (Mac) : le socket appartient au groupe 0.
+
+name: asgor
+
+x-durci: &durci
+  image: asgor:developpement
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *durci
+    command: ["asgor-web", "--hote", "0.0.0.0", "--port", "8000",
+              "--hote-autorise", "127.0.0.1:8000", "--hote-autorise", "localhost:8000"]
+    user: "10002:10002"
+    # Publié sur 127.0.0.1 du poste seulement.
+    ports: ["127.0.0.1:8000:8000"]
+    networks: [web]
+    tmpfs: ["/tmp"]
+    volumes:
+      - asgor-base:/var/lib/asgor/database:ro
+      - asgor-rapports:/var/lib/asgor/reports:ro
+      - asgor-file:/var/lib/asgor/file
+    depends_on: [worker]
+
+  worker:
+    <<: *durci
+    command: ["asgor-worker"]
+    user: "10001:10001"
+    # Groupe asgor-web : le worker donne la base et les rapports en lecture au service
+    # web, et relève les demandes déposées par lui.
+    group_add: ["10002"]
+    network_mode: none
+    # /run : verrou « une seule analyse à la fois » (/run/asgor-scan.lock), au compte 10001.
+    tmpfs: ["/run:uid=10001,gid=10001,mode=0700", "/tmp"]
+    volumes:
+      - asgor-analyses:/var/lib/asgor/jobs
+      - asgor-cache:/var/lib/asgor/cache
+      - asgor-regles:/opt/asgor/regles
+      - asgor-controle:/run/asgor-controle
+      - asgor-base:/var/lib/asgor/database
+      - asgor-rapports:/var/lib/asgor/reports
+      - asgor-journaux:/var/lib/asgor/logs
+      - asgor-file:/var/lib/asgor/file
+      - asgor-secrets:/etc/asgor/secrets
+    depends_on: [filtre, proxy]
+
+  filtre:
+    <<: *durci
+    build: .
+    command: ["python3", "-m", "asgor_moteur.filtre_docker"]
+    user: "10003:10003"
+    # Seul accès au socket Docker : le groupe propriétaire du socket, pas root.
+    group_add: ["${DOCKER_GID:-0}"]
+    network_mode: none
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - asgor-controle:/run/asgor-controle
+
+  proxy:
+    <<: *durci
+    command: ["python3", "-m", "asgor_moteur.proxy_sortie"]
+    user: "65534:65534"
+    networks: [asgor-fetch, sortie]
+
+volumes:
+  # Noms fixes : le filtre désigne les quatre premiers par ces noms dans la
+  # configuration des étapes.
+  asgor-analyses: {name: asgor-analyses}
+  asgor-cache: {name: asgor-cache}
+  asgor-regles: {name: asgor-regles}
+  asgor-controle: {name: asgor-controle}
+  asgor-base: {name: asgor-base}
+  asgor-rapports: {name: asgor-rapports}
+  asgor-journaux: {name: asgor-journaux}
+  asgor-file: {name: asgor-file}
+  asgor-secrets: {name: asgor-secrets}
+
+networks:
+  # Réseau des étapes « fetch » : interne, aucune route vers l'extérieur ; seule sortie, le proxy.
+  asgor-fetch: {name: asgor-fetch, internal: true}
+  sortie: {name: asgor-sortie}
+  # Réseau du service web : seulement pour publier le port 8000 sur 127.0.0.1.
+  web: {name: asgor-web}

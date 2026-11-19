@@ -4,6 +4,8 @@
 #   --hote      adresse d'écoute (127.0.0.1 par défaut)
 #   --proxy     adresse du reverse proxy (Caddy) dont on accepte les en-têtes
 #               X-Forwarded-For et X-Forwarded-Proto (plusieurs --proxy possibles)
+#   --hote-autorise  nom d'hôte accepté dans l'en-tête Host (image Docker :
+#               127.0.0.1:8000 et localhost:8000) ; sans cette option, pas de contrôle
 # -I : Python ignore les variables d'environnement PYTHON* et le dossier courant.
 import argparse
 import ipaddress
@@ -21,10 +23,11 @@ options.add_argument("--hote", default="127.0.0.1", type=lambda v: str(ipaddress
 options.add_argument("--port", default=8000, type=int)
 options.add_argument("--proxy", action="append", default=[],
                      type=lambda v: str(ipaddress.ip_address(v)))
+options.add_argument("--hote-autorise", action="append", default=[])
 arguments = options.parse_args()
 
 # Sans --proxy, aucun en-tête X-Forwarded-* n'est pris en compte.
-uvicorn.run(creer_app(), host=arguments.hote, port=arguments.port, server_header=False,
+uvicorn.run(creer_app(hotes_autorises=arguments.hote_autorise), host=arguments.hote, port=arguments.port, server_header=False,
             proxy_headers=bool(arguments.proxy),
             forwarded_allow_ips=",".join(arguments.proxy) or "127.0.0.1",
             log_level="info")

@@ -79,57 +79,31 @@
         bins: [pip-audit]
         enabled: true
 
-    # Binaires publiés sur GitHub. Version vide = outil non installé.
-    # Valeurs relevées le 14/11/2026 (voir README : vérifier les signatures avant usage).
-    asgor_binary_tools:
-      - name: gitleaks
-        version: '8.30.1'
-        sha256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'  # gitleaks_8.30.1_checksums.txt
-        url: 'https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_linux_x64.tar.gz'
-        archive: true
-        member: gitleaks
-      - name: trivy
-        version: '0.76.2'    # publiée bien après l'incident de mars 2026 (v0.69.4 malveillante)
-        sha256: 'bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf'  # trivy_0.76.2_checksums.txt
-        url: 'https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-64bit.tar.gz'
-        archive: true
-        member: trivy
-      - name: osv-scanner
-        version: '2.7.1'
-        sha256: 'fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8'  # osv-scanner_SHA256SUMS
-        url: 'https://github.com/google/osv-scanner/releases/download/v{version}/osv-scanner_linux_amd64'
-        archive: false
-      - name: opengrep
-        version: '2.0.0'
-        # Pas de fichier de sommes publié : SHA256 calculé sur le binaire téléchargé.
-        # La signature Cosign (.sig + .cert) doit être vérifiée (voir README).
-        sha256: '37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0'
-        url: 'https://github.com/opengrep/opengrep/releases/download/v{version}/opengrep_linux_x86'  # nom des binaires Linux depuis la v2
-        archive: false
-      # Psalm et PHPStan : PHAR officiels (un seul fichier, signé GPG) au lieu de Composer,
-      # qui installait 55 paquets sans aucune somme de contrôle.
-      # SHA256 : empreinte publiée par GitHub sur la release, recalculée le 16/11/2026.
-      # Signature GPG vérifiée par verifier-signatures.sh.
-      - name: psalm
-        # EXCEPTION à la règle des 14 jours : publiée le
-        # 14/11/2026, aucune version 7 stable plus ancienne. Conforme à partir du 28/11/2026.
-        version: '7.5.0'
-        sha256: 'cdb2430a6cfaff77863e0d965dc6d2c5b03a9351460d4c4b5e587ed701be41a7'
-        url: 'https://github.com/vimeo/psalm/releases/download/{version}/psalm.phar'
-        archive: false
-      - name: phpstan
-        version: '2.3.4'     # publiée le 28/10/2026 (2.3.5 du 03/11 : moins de 14 jours le 16/11)
-        sha256: 'a961d12cc71941a31ad6560e6a330347d487612628c3202a718f71a59de21a7c'
-        url: 'https://github.com/phpstan/phpstan/releases/download/{version}/phpstan.phar'
-        archive: false
+    # Versions et sommes SHA256 des binaires et des règles : une seule source,
+    # ../versions-outils.json, lue aussi par le Dockerfile. La VM prend les valeurs
+    # « linux/amd64 » (ou « tous » pour les PHAR de Psalm et PHPStan).
+    # Signatures à vérifier avant tout changement : verifier-signatures.sh.
+    # Psalm 7.5.0 : EXCEPTION à la règle des 14 jours (publiée le 14/11/2026, aucune
+    # version 7 stable plus ancienne), conforme à partir du 28/11/2026.
+    asgor_versions_outils: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../versions-outils.json') | from_json }}"
+    asgor_binary_tools: >-
+      {%- set outils = [] -%}
+      {%- for nom, outil in asgor_versions_outils.binaires.items() -%}
+      {%- set fichier = outil['linux/amd64'] | default(outil['tous']) -%}
+      {%- set _ = outils.append({'name': nom, 'version': outil.version, 'sha256': fichier.sha256,
+                                 'url': fichier.url, 'archive': outil.archive is defined,
+                                 'member': outil.archive | default(nom)}) -%}
+      {%- endfor -%}
+      {{ outils }}
 
     # Règles de Semgrep et d'Opengrep (dépôt semgrep/semgrep-rules), figées à un commit.
     # Licence « Semgrep Rules License v1.0 » : usage interne seulement, pas de
     # redistribution. Elles ne sont donc JAMAIS copiées dans ce dépôt : le playbook
     # les télécharge sur la VM (voir README.md, « Licence »).
     # SHA256 de l'archive https://github.com/semgrep/semgrep-rules/archive/<commit>.tar.gz
-    asgor_semgrep_rules_commit: 'a5ad1714f00c9f7fde980cab0ea1d6dc6d414fd2'   # 10/11/2026
-    asgor_semgrep_rules_sha256: 'e5a7ec33035fc7707b87385cb99e1228c76b1604efe5439e92891f3005714cc3'
+    # Commit du 10/11/2026 ; valeurs dans ../versions-outils.json.
+    asgor_semgrep_rules_commit: '{{ asgor_versions_outils.regles_semgrep.commit }}'
+    asgor_semgrep_rules_sha256: '{{ asgor_versions_outils.regles_semgrep.sha256 }}'
     asgor_semgrep_rules_dir: '{{ asgor_root }}/regles/semgrep-rules'
 
   pre_tasks:

@@ -137,7 +137,7 @@ def ouvrir_ecriture(chemin: str = BASE) -> sqlite3.Connection:
         except KeyError:
             gid = None
         if gid is not None:
-            os.chown(chemin, 0, gid)
+            os.chown(chemin, -1, gid)
             os.chmod(chemin, 0o640)
         else:
             os.chmod(chemin, 0o600)

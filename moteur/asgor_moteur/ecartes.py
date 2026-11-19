@@ -79,7 +79,7 @@ def _ecrire_remplacer(chemin: str, texte: str, gid) -> None:
     fichiers.supprimer(temporaire)
     fichiers.ecrire_nouveau(temporaire, texte, 0o600)
     if gid is not None:
-        os.chown(temporaire, 0, gid)
+        os.chown(temporaire, -1, gid)
         os.chmod(temporaire, 0o640)
     os.replace(temporaire, chemin)     # atomique : le service web ne lit jamais un fichier à moitié écrit
 

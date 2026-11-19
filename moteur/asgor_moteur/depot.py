@@ -86,6 +86,12 @@ def inventorier(racine: str) -> Inventaire:
     inv = Inventaire()
     vus = 0
     for dossier, sous_dossiers, noms in os.walk(racine, followlinks=False):
+        # Ordre alphabétique : l'ordre rendu par le système de fichiers change d'une
+        # machine à l'autre (vu le 19/11/2026 entre la VM et l'image Docker sur pygoat).
+        # Avec les plafonds (NB_MAX_MANIFESTES, NB_MAX_FICHIERS…), les fichiers retenus,
+        # donc les résultats, en dépendaient.
+        sous_dossiers.sort()
+        noms.sort()
         relatif = os.path.relpath(dossier, racine)
         relatif = "" if relatif == "." else relatif
         for nom in list(sous_dossiers):

@@ -38,10 +38,14 @@ class Chemins:
     outils: str = "/opt/asgor/outils.json"
 
 
-def creer_app(chemins: Chemins = Chemins()) -> FastAPI:
+def creer_app(chemins: Chemins = Chemins(), hotes_autorises=()) -> FastAPI:
     """HTTPS : derrière Caddy, la VM reçoit du HTTP. Uvicorn n'accepte les en-têtes
     X-Forwarded-Proto que du proxy déclaré (option --proxy de asgor-web) ; le schéma
-    vu ici vaut alors « https », et le cookie CSRF est marqué Secure."""
+    vu ici vaut alors « https », et le cookie CSRF est marqué Secure.
+
+    hotes_autorises : noms d'hôte acceptés (« 127.0.0.1:8000 »…), pour l'image Docker.
+    Vide (VM) : pas de contrôle, Caddy ne transmet que le nom du site."""
+    hotes_autorises = frozenset(h.strip().lower() for h in hotes_autorises if h.strip())
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, debug=False)
     app.mount("/static", StaticFiles(directory=os.path.join(ICI, "static")), name="static")
 
@@ -103,7 +107,14 @@ def creer_app(chemins: Chemins = Chemins()) -> FastAPI:
     # ------------------------------------------------------------- en-têtes
     @app.middleware("http")
     async def entetes(requete: Request, suite):
-        reponse = await suite(requete)
+        # Image Docker (site sur 127.0.0.1 du poste) : seuls les noms d'hôte prévus sont
+        # acceptés, pour toutes les requêtes. Sans cela, un site malveillant ouvert par le
+        # développeur pourrait, par « DNS rebinding », lire les rapports et lancer des
+        # analyses : il contrôlerait alors à la fois l'en-tête Host et l'en-tête Origin.
+        if hotes_autorises and requete.headers.get("host", "").lower() not in hotes_autorises:
+            reponse = PlainTextResponse("Nom d'hôte refusé.", status_code=421)
+        else:
+            reponse = await suite(requete)
         for cle, valeur in securite.ENTETES.items():
             reponse.headers.setdefault(cle, valeur)
         if requete.url.scheme == "https":

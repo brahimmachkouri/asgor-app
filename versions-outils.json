@@ -1,0 +1,75 @@
+{
+  "_commentaire": "Versions et sommes SHA256 des outils d'ASGOR, lues par le Dockerfile (docker/installer-binaires.sh). Une somme par architecture, relevée dans le fichier de sommes de la release et recoupée avec l'empreinte affichée par GitHub. Règle : versions publiées depuis au moins 14 jours. Signatures (Cosign, GPG) vérifiées par asgor-ansible/verifier-signatures.sh avant tout changement.",
+  "image_ubuntu": "ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db",
+  "instantane_apt": "20261105T000000Z",
+  "binaires": {
+    "gitleaks": {
+      "version": "8.30.1",
+      "linux/amd64": {
+        "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+        "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+      },
+      "linux/arm64": {
+        "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz",
+        "sha256": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+      },
+      "archive": "gitleaks"
+    },
+    "trivy": {
+      "version": "0.76.2",
+      "linux/amd64": {
+        "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz",
+        "sha256": "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+      },
+      "linux/arm64": {
+        "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-ARM64.tar.gz",
+        "sha256": "ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+      },
+      "archive": "trivy"
+    },
+    "osv-scanner": {
+      "version": "2.7.1",
+      "linux/amd64": {
+        "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64",
+        "sha256": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8"
+      },
+      "linux/arm64": {
+        "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_arm64",
+        "sha256": "983d22fbad9724514e3fcc6acc83b5fa64c5ffa6b0d9f510028f22c1b223ff81"
+      }
+    },
+    "opengrep": {
+      "version": "2.0.0",
+      "linux/amd64": {
+        "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_x86",
+        "sha256": "37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0"
+      },
+      "linux/arm64": {
+        "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_aarch64",
+        "sha256": "6257b65423a744b704af2ff9beeb8f222c2f6925236af386b56b031d4c06d6d8"
+      }
+    },
+    "psalm": {
+      "version": "7.5.0",
+      "tous": {
+        "url": "https://github.com/vimeo/psalm/releases/download/7.5.0/psalm.phar",
+        "sha256": "cdb2430a6cfaff77863e0d965dc6d2c5b03a9351460d4c4b5e587ed701be41a7"
+      }
+    },
+    "phpstan": {
+      "version": "2.3.4",
+      "tous": {
+        "url": "https://github.com/phpstan/phpstan/releases/download/2.3.4/phpstan.phar",
+        "sha256": "a961d12cc71941a31ad6560e6a330347d487612628c3202a718f71a59de21a7c"
+      }
+    }
+  },
+  "outils_python": {
+    "bandit": {"version": "1.9.4", "liste": "asgor-ansible/files/outils-python/bandit.txt"},
+    "pip-audit": {"version": "2.10.1", "liste": "asgor-ansible/files/outils-python/pip-audit.txt"}
+  },
+  "regles_semgrep": {
+    "commit": "a5ad1714f00c9f7fde980cab0ea1d6dc6d414fd2",
+    "sha256": "e5a7ec33035fc7707b87385cb99e1228c76b1604efe5439e92891f3005714cc3"
+  }
+}

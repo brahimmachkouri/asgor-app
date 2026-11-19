@@ -1,0 +1,135 @@
+# Image Docker d'ASGOR : construction et vérification sur chaque architecture, sans émulation.
+#  - mise à jour de main ou demande de fusion : construction et vérification seulement ;
+#  - étiquette vX.Y.Z : construction, vérification, puis publication sur
+#    ghcr.io/brahimmachkouri/asgor:X.Y.Z (amd64 et arm64) avec une attestation de provenance.
+# Chaîne de publication réduite au minimum : deux actions, épinglées par empreinte de
+# commit complète (actions/checkout, actions/attest) ; le reste en commandes docker.
+# Aucun secret autre que le jeton fourni par GitHub. Pas d'étiquette « latest ».
+
+name: Image Docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  DEPOT_IMAGE: ghcr.io/brahimmachkouri/asgor
+
+jobs:
+  # ------------------------------------------------------------------ vérification
+  verifier:
+    if: github.ref_type != 'tag'
+    name: Vérification (${{ matrix.arch }})
+    runs-on: ${{ matrix.machine }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, machine: ubuntu-24.04}
+          - {arch: arm64, machine: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Construction
+        run: bash docker/ci.sh construire
+      - name: Tests, autotest, dépôt piège
+        run: bash docker/ci.sh verifier
+
+  # --------------------------------------------------- publication, par architecture
+  # L'image publiée est celle qui vient d'être vérifiée sur la même machine.
+  # Les identifiants du registre ne sont écrits qu'après les vérifications.
+  publier-architecture:
+    if: github.ref_type == 'tag'
+    name: Publication (${{ matrix.arch }})
+    runs-on: ${{ matrix.machine }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {arch: amd64, machine: ubuntu-24.04}
+          - {arch: arm64, machine: ubuntu-24.04-arm}
+    steps:
+      - name: Numéro de version
+        env:
+          ETIQUETTE: ${{ github.ref_name }}
+        run: |
+          [[ "$ETIQUETTE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Étiquette refusée : $ETIQUETTE (attendu vX.Y.Z)"; exit 1; }
+          echo "VERSION=${ETIQUETTE#v}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Construction
+        run: bash docker/ci.sh construire "$VERSION"
+      - name: Tests, autotest, dépôt piège
+        run: bash docker/ci.sh verifier
+      - name: Envoi au registre
+        env:
+          JETON: ${{ secrets.GITHUB_TOKEN }}
+          ACTEUR: ${{ github.actor }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          cible="$DEPOT_IMAGE:$VERSION-$ARCH"
+          echo "$JETON" | docker login ghcr.io -u "$ACTEUR" --password-stdin
+          if docker manifest inspect "$DEPOT_IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "La version $VERSION est déjà publiée : rien n'est remplacé."; docker logout ghcr.io; exit 1
+          fi
+          docker tag asgor:developpement "$cible"
+          docker push "$cible"
+          docker logout ghcr.io
+
+  # ------------------------------------------- manifeste commun et attestation
+  publier:
+    needs: publier-architecture
+    name: Publication (manifeste et attestation)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Manifeste amd64 + arm64
+        id: manifeste
+        env:
+          ETIQUETTE: ${{ github.ref_name }}
+          JETON: ${{ secrets.GITHUB_TOKEN }}
+          ACTEUR: ${{ github.actor }}
+        run: |
+          [[ "$ETIQUETTE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          version=${ETIQUETTE#v}
+          echo "$JETON" | docker login ghcr.io -u "$ACTEUR" --password-stdin
+          # Le manifeste désigne chaque architecture par son empreinte.
+          docker buildx imagetools create -t "$DEPOT_IMAGE:$version" \
+            "$DEPOT_IMAGE:$version-amd64" "$DEPOT_IMAGE:$version-arm64"
+          docker buildx imagetools inspect "$DEPOT_IMAGE:$version"
+          empreinte=$(docker buildx imagetools inspect "$DEPOT_IMAGE:$version" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$empreinte" =~ ^sha256:[0-9a-f]{64}$ ]]
+          plateformes=$(docker buildx imagetools inspect "$DEPOT_IMAGE:$version" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')
+          [ "$plateformes" = "linux/amd64 linux/arm64" ] || { echo "plateformes : $plateformes"; exit 1; }
+          docker logout ghcr.io
+          echo "empreinte=$empreinte" >> "$GITHUB_OUTPUT"
+          echo "Image : \`$DEPOT_IMAGE:$version@$empreinte\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Attestation de provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.DEPOT_IMAGE }}
+          subject-digest: ${{ steps.manifeste.outputs.empreinte }}
+          push-to-registry: true

@@ -20,7 +20,7 @@ import time
 from . import analyseurs, avancement, fichiers, sarif
 from .avancement import Observateur, nombre_fr
 from .depot import inventorier, requirements_epingle, verifier_verrouillage
-from .etapes import ANNULEE, DELAI, ECHEC, OK, Lanceur
+from .etapes import ANNULEE, DELAI, ECHEC, OK, Lanceur, LanceurDocker
 from .fusion import supprimer_doublons
 from .modele import CODE, DEPENDANCES, MOYENNE, SECRETS, Probleme
 from .notation import Contexte, noter
@@ -45,6 +45,11 @@ GROUPE_WEB = "asgor-web"                # le service web lit les rapports (étap
 
 TAILLE_MAX_DEPOT = 500 * 1024 * 1024   # règle 4 de sécurité du moteur (README.md)
 DUREE_MAX_ANALYSE = 30 * 60
+
+
+def mode_docker() -> bool:
+    """Image Docker : étapes lancées par le filtre du socket Docker (LanceurDocker)."""
+    return os.environ.get("ASGOR_LANCEUR") == "docker"
 NB_MAX_AUDITS = 5
 NIVEAU_PHPSTAN = 5  # 0 à 10 ; rubrique « Qualité du code », sans effet sur la note
 
@@ -789,9 +794,11 @@ class Analyse:
     # ------------------------------------------------------------- déroulement
 
     def lancer(self) -> dict:
-        if os.geteuid() != 0:
+        if mode_docker():
+            pass  # contrôles faits au démarrage du worker (demarrage_docker.preparer)
+        elif os.geteuid() != 0:
             raise AnalyseImpossible("asgor-scan doit être lancé en root")
-        if not os.path.ismount(DONNEES):
+        elif not os.path.ismount(DONNEES):
             # Les données doivent être sur le disque de données, jamais sur le
             # disque système : /var/lib/asgor est un montage de /mnt/data/asgor.
             raise AnalyseImpossible(
@@ -808,8 +815,12 @@ class Analyse:
         depart = time.monotonic()
         try:
             os.makedirs(self.journaux, mode=0o700, exist_ok=True)
-            self.lanceur = Lanceur(self.id, self.journaux, depart + DUREE_MAX_ANALYSE,
-                                   arret=self.arret)
+            if mode_docker():
+                self.lanceur = LanceurDocker(self.id, self.journaux, depart + DUREE_MAX_ANALYSE,
+                                             arret=self.arret, dossier_analyses=ANALYSES)
+            else:
+                self.lanceur = Lanceur(self.id, self.journaux, depart + DUREE_MAX_ANALYSE,
+                                       arret=self.arret)
             self.afficher(f"Analyse {self.id} de {self.depot.affichage}")
             if not self.historique_complet:
                 self.contexte.historique_non_analyse = True
@@ -912,7 +923,7 @@ class Analyse:
             json.dumps(sarif.vers_sarif(rapport), ensure_ascii=False, indent=2) + "\n", 0o600)
         if gid is not None:
             for chemin in (self.chemin_rapport, self.chemin_sarif):
-                os.chown(chemin, 0, gid)
+                os.chown(chemin, -1, gid)
                 os.chmod(chemin, 0o640)
         # Copie dans le dossier de l'analyse (commande cible de l'étape 3).
         copie = os.path.join(self.out, "rapport.json")

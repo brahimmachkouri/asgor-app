@@ -120,6 +120,30 @@ class Web(unittest.TestCase):
         self.assertIn("httponly", cookie)
         self.assertIn("samesite=strict", cookie)
 
+    def test_nom_d_hote_image_docker(self):
+        """Image Docker : seuls 127.0.0.1:8000 et localhost:8000 (DNS rebinding)."""
+        autorises = ["127.0.0.1:8000", "localhost:8000"]
+        for hote in autorises:
+            with self.subTest(hote=hote):
+                client = TestClient(creer_app(self.chemins, hotes_autorises=autorises),
+                                    base_url=f"http://{hote}")
+                self.assertEqual(client.get("/").status_code, 200)
+        piege = TestClient(creer_app(self.chemins, hotes_autorises=autorises),
+                           base_url="http://piege.exemple:8000")
+        r = piege.get("/")
+        self.assertEqual(r.status_code, 421)
+        self.assertNotIn("set-cookie", r.headers)
+        self.assertEqual(r.headers["x-content-type-options"], "nosniff")
+        for chemin in ("/sante", "/analyses/" + "a" * 32, "/analyses/" + "a" * 32 + "/rapport.json"):
+            self.assertEqual(piege.get(chemin).status_code, 421)
+        # Formulaire : Host et Origin du site piège, cohérents entre eux, et un jeton valide.
+        r = piege.post("/analyses", data={"url": "https://github.com/a/b", "csrf": "x" * 43},
+                       headers={"Origin": "http://piege.exemple:8000"}, cookies={"csrf": "x" * 43})
+        self.assertEqual(r.status_code, 421)
+        self.assertEqual(os.listdir(self.chemins.file), [])
+        # Sans liste (VM derrière Caddy) : pas de contrôle.
+        self.assertEqual(TestClient(creer_app(self.chemins), base_url="http://autre:8000").get("/").status_code, 200)
+
     def test_https_derriere_caddy(self):
         # En HTTP (tunnel SSH) : cookie sans Secure, pas de HSTS.
         r = self.client.get("/")

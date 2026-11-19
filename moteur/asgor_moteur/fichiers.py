@@ -7,6 +7,7 @@ outils. On ne suit donc jamais un lien symbolique et on limite la taille lue.
 
 import json
 import os
+import shutil
 import stat
 
 TAILLE_MAX_JSON = 300 * 1024 * 1024
@@ -69,6 +70,21 @@ def supprimer(chemin: str) -> None:
         os.unlink(chemin)
     except FileNotFoundError:
         pass
+
+
+def supprimer_arbre(chemin: str) -> None:
+    """Supprime un dossier et son contenu, sans suivre les liens, même si un outil y a
+    laissé un dossier sans droit d'écriture (même compte : on rétablit le droit)."""
+    def reessayer(fonction, chemin_erreur, _exc):
+        try:
+            os.chmod(os.path.dirname(chemin_erreur), 0o700)
+            if os.path.isdir(chemin_erreur) and not os.path.islink(chemin_erreur):
+                os.chmod(chemin_erreur, 0o700)
+            fonction(chemin_erreur)
+        except OSError:
+            pass
+    if os.path.lexists(chemin):
+        shutil.rmtree(chemin, onexc=reessayer)
 
 
 def taille_dossier(racine: str, plafond: int) -> int:

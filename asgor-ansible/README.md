@@ -28,7 +28,7 @@ Règle : versions exactes, avec SHA256, **publiées depuis au moins 14 jours**.
 | Règles Semgrep | commit `a5ad171` | archive GitHub (jamais copiées dans le dépôt : licence) |
 | Service web | `web/requirements.txt` | API JSON de PyPI, une somme par fichier publié |
 
-Psalm et PHPStan sont installés sous forme de PHAR (un seul fichier chacun, SHA256 dans `asgor.yml`, signature GPG vérifiée par `verifier-signatures.sh`). Avant, Composer installait 55 paquets sans aucune somme de contrôle (Packagist n'en publie pas).
+Psalm et PHPStan sont installés sous forme de PHAR (un seul fichier chacun, SHA256 dans `../versions-outils.json`, signature GPG vérifiée par `verifier-signatures.sh`). Avant, Composer installait 55 paquets sans aucune somme de contrôle (Packagist n'en publie pas).
 
 ## Adresses du réseau d'installation
 
@@ -70,8 +70,8 @@ En simulation, quelques erreurs sont normales sur une VM qui n'a pas encore reç
 
 ## Mettre à jour un outil plus tard
 
-1. Changer `version` et `sha256` dans `asgor.yml` (somme prise dans le fichier de sommes de la release).
-2. Adapter et relancer `verifier-signatures.sh`.
+1. Changer la version et les sommes (une par architecture) dans `../versions-outils.json`, seule source lue par le playbook et par le Dockerfile (somme prise dans le fichier de sommes de la release).
+2. Relancer `verifier-signatures.sh` (il lit `versions-outils.json` et vérifie les deux architectures).
 3. Relancer le playbook. L'ancienne version reste dans `/opt/asgor/tools/<outil>/` pour un retour arrière.
 
 ## Ce que fait le playbook

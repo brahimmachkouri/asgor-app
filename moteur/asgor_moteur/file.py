@@ -21,6 +21,10 @@ from . import fichiers
 from .url import UrlInvalide, valider_url
 
 FILE = "/var/lib/asgor/file"
+# Demandes lisibles par le groupe : sur la VM, le dossier est en 0700 (asgor-web) et le
+# worker est root ; dans l'image Docker, le worker (10001) est membre du groupe
+# asgor-web (10002), propriétaire du dossier (2770).
+MODE_DEMANDE = 0o640
 TAILLE_MAX = 2048            # octets par fichier
 NB_MAX_EN_FILE = 20          # demandes en attente acceptées par le service web
 NB_MAX_PAR_RELEVE = 100      # fichiers traités par le worker à chaque passage
@@ -118,7 +122,7 @@ def deposer_marquage(analyse: str, action: str, empreintes, motif: str, ip: str,
                           "empreintes": list(empreintes), "motif": motif, "ip": ip},
                          ensure_ascii=False)
     temporaire = os.path.join(dossier, f".{identifiant}.tmp")
-    fichiers.ecrire_nouveau(temporaire, contenu, 0o600)
+    fichiers.ecrire_nouveau(temporaire, contenu, MODE_DEMANDE)
     os.rename(temporaire, os.path.join(dossier, f"{identifiant}.marquage"))
     return identifiant
 
@@ -141,7 +145,7 @@ def deposer_demande(url: str, historique_complet: bool = True, masquee: bool = F
         "forcee": bool(forcee),
     })
     temporaire = os.path.join(dossier, f".{identifiant}.tmp")
-    fichiers.ecrire_nouveau(temporaire, contenu, 0o600)
+    fichiers.ecrire_nouveau(temporaire, contenu, MODE_DEMANDE)
     # Le renommage est atomique : le worker ne voit jamais un fichier à moitié écrit.
     os.rename(temporaire, os.path.join(dossier, f"{identifiant}.json"))
     return identifiant
@@ -151,7 +155,7 @@ def deposer_annulation(identifiant: str, dossier: str = FILE) -> None:
     if not isinstance(identifiant, str) or not re.fullmatch(_ID, identifiant):
         raise ValueError("identifiant invalide")
     try:
-        fichiers.ecrire_nouveau(os.path.join(dossier, f"{identifiant}.annuler"), "", 0o600)
+        fichiers.ecrire_nouveau(os.path.join(dossier, f"{identifiant}.annuler"), "", MODE_DEMANDE)
     except FileExistsError:
         pass  # déjà demandée
 
