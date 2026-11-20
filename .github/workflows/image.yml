@@ -124,7 +124,6 @@ jobs:
           plateformes=$(docker buildx imagetools inspect "$DEPOT_IMAGE:$version" --format '{{json .Manifest}}' \
             | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')
           [ "$plateformes" = "linux/amd64 linux/arm64" ] || { echo "plateformes : $plateformes"; exit 1; }
-          docker logout ghcr.io
           echo "empreinte=$empreinte" >> "$GITHUB_OUTPUT"
           echo "Image : \`$DEPOT_IMAGE:$version@$empreinte\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Attestation de provenance
@@ -133,3 +132,8 @@ jobs:
           subject-name: ${{ env.DEPOT_IMAGE }}
           subject-digest: ${{ steps.manifeste.outputs.empreinte }}
           push-to-registry: true
+      # L'action d'attestation lit les identifiants de docker login pour écrire l'attestation
+      # dans le registre (échec de v0.1.0 : déconnexion faite trop tôt).
+      - name: Déconnexion du registre
+        if: always()
+        run: docker logout ghcr.io
